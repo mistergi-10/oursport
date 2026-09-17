@@ -20,6 +20,13 @@ app.register(cors, {
   origin: process.env.CORS_ORIGIN?.split(",") ?? true,
 });
 
+app.get("/", async () => ({
+  service: "oursport-api",
+  status: "ok",
+  health: "/health",
+  readiness: "/ready",
+}));
+
 app.get("/health", async () => ({ status: "ok" }));
 
 app.get("/ready", async (_request, reply) => {
