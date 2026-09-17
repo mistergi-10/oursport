@@ -23,10 +23,10 @@ The API build command is:
 npm ci && npm run build
 ```
 
-The migration command runs before deployment:
+The compiled migration command runs before deployment:
 
 ```text
-npm run db:migrate
+node dist/db/migrate.js
 ```
 
 The start command is:
