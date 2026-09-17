@@ -1,6 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { NavigationContainer } from "@react-navigation/native";
+import {
+  createNativeStackNavigator,
+  type NativeStackScreenProps,
+} from "@react-navigation/native-stack";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -22,8 +28,34 @@ const C = {
   line: "#E1E6DD",
 };
 type Profile = { name: string; city: string; sport: string; level: string };
-type Tab = "matching" | "chats" | "events" | "profile";
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:10000";
+
+type RootStackParamList = {
+  Welcome: undefined;
+  ProfileSetup: undefined;
+  Main: { screen?: keyof MainTabParamList } | undefined;
+};
+type MainTabParamList = {
+  Matching: undefined;
+  Chats: undefined;
+  Events: undefined;
+  Profile: undefined;
+};
+const RootStack = createNativeStackNavigator<RootStackParamList>();
+const MainTab = createBottomTabNavigator<MainTabParamList>();
+const ProfileContext = createContext<Profile | null>(null);
+const tabIcons: Record<keyof MainTabParamList, string> = {
+  Matching: "♡",
+  Chats: "◌",
+  Events: "□",
+  Profile: "○",
+};
+const tabLabels: Record<keyof MainTabParamList, string> = {
+  Matching: "Matching",
+  Chats: "Chats",
+  Events: "Events",
+  Profile: "Profil",
+};
 const sports = [
   "Laufen",
   "Tennis",
@@ -66,15 +98,68 @@ export default function App() {
         <ActivityIndicator color={C.ink} />
       </View>
     );
-  return profile ? (
-    <MainApp profile={profile} />
-  ) : (
-    <ProfileSetup
-      userId={userId}
-      onComplete={(nextProfile) => {
-        setProfile(nextProfile);
-      }}
-    />
+  return (
+    <ProfileContext.Provider value={profile}>
+      <NavigationContainer>
+        <RootStack.Navigator
+          screenOptions={{ headerShown: false }}
+          initialRouteName={profile ? "Main" : "Welcome"}
+        >
+          <RootStack.Screen name="Welcome">
+            {({ navigation }) => (
+              <WelcomeScreen onStart={() => navigation.navigate("ProfileSetup")} />
+            )}
+          </RootStack.Screen>
+          <RootStack.Screen name="ProfileSetup">
+            {({ navigation }) => (
+              <ProfileSetup
+                userId={userId}
+                onComplete={(nextProfile) => {
+                  setProfile(nextProfile);
+                  navigation.reset({ index: 0, routes: [{ name: "Main" }] });
+                }}
+              />
+            )}
+          </RootStack.Screen>
+          <RootStack.Screen name="Main" component={MainTabs} />
+        </RootStack.Navigator>
+      </NavigationContainer>
+    </ProfileContext.Provider>
+  );
+}
+
+function WelcomeScreen({ onStart }: { onStart: () => void }) {
+  const features: [string, string][] = [
+    ["♥", "Finde Trainingspartner, die zu deinem Level passen"],
+    ["◌", "Chatte direkt und plant euer naechstes Training"],
+    ["□", "Entdecke lokale Sport-Events in deiner Naehe"],
+  ];
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.welcome}>
+        <View style={styles.hero}>
+          <BrandMark />
+          <Text style={styles.wordmark}>Our Sport</Text>
+          <Text style={styles.tagline}>
+            Finde Trainingspartner in deiner Naehe. Sport macht zu zweit
+            einfach mehr Spass.
+          </Text>
+        </View>
+        <View style={styles.features}>
+          {features.map(([icon, text]) => (
+            <View style={styles.feature} key={text}>
+              <View style={styles.featureIcon}>
+                <Text style={styles.tabIcon}>{icon}</Text>
+              </View>
+              <Text style={styles.featureText}>{text}</Text>
+            </View>
+          ))}
+        </View>
+        <Pressable style={styles.primary} onPress={onStart}>
+          <Text style={styles.primaryText}>Los geht's</Text>
+        </Pressable>
+      </View>
+    </SafeAreaView>
   );
 }
 
@@ -237,54 +322,45 @@ function Chip({
   );
 }
 
-function MainApp({ profile }: { profile: Profile }) {
-  const [tab, setTab] = useState<Tab>("matching");
+function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Main">) {
   const [match, setMatch] = useState(false);
   const [passed, setPassed] = useState(false);
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
       <View style={styles.flex}>
-        {tab === "matching" && (
-          <Matching
-            profile={profile}
-            passed={passed}
-            onPass={() => setPassed(true)}
-            onLike={() => setMatch(true)}
-          />
-        )}
-        {tab === "chats" && <Chats />}
-        {tab === "events" && <Events />}
-        {tab === "profile" && <ProfileScreen profile={profile} />}
-        <View style={styles.tabBar}>
-          {(
-            [
-              ["matching", "♡"],
-              ["chats", "◌"],
-              ["events", "□"],
-              ["profile", "○"],
-            ] as [Tab, string][]
-          ).map(([name, icon]) => (
-            <Pressable
-              key={name}
-              style={styles.tabItem}
-              onPress={() => setTab(name)}
-            >
-              <Text style={[styles.tabIcon, tab === name && styles.tabActive]}>
-                {icon}
+        <MainTab.Navigator
+          screenOptions={({ route }) => ({
+            headerShown: false,
+            tabBarStyle: styles.tabBar,
+            tabBarItemStyle: styles.tabItem,
+            tabBarActiveTintColor: C.ink,
+            tabBarInactiveTintColor: C.mist,
+            tabBarLabel: ({ color }) => (
+              <Text style={[styles.tabLabel, { color }]}>
+                {tabLabels[route.name]}
               </Text>
-              <Text style={[styles.tabLabel, tab === name && styles.tabActive]}>
-                {name === "matching"
-                  ? "Matching"
-                  : name === "chats"
-                    ? "Chats"
-                    : name === "events"
-                      ? "Events"
-                      : "Profil"}
+            ),
+            tabBarIcon: ({ color }) => (
+              <Text style={[styles.tabIcon, { color }]}>
+                {tabIcons[route.name]}
               </Text>
-            </Pressable>
-          ))}
-        </View>
+            ),
+          })}
+        >
+          <MainTab.Screen name="Matching">
+            {() => (
+              <Matching
+                passed={passed}
+                onPass={() => setPassed(true)}
+                onLike={() => setMatch(true)}
+              />
+            )}
+          </MainTab.Screen>
+          <MainTab.Screen name="Chats" component={Chats} />
+          <MainTab.Screen name="Events" component={Events} />
+          <MainTab.Screen name="Profile" component={ProfileScreen} />
+        </MainTab.Navigator>
         {match && (
           <View style={styles.overlay}>
             <View style={styles.overlayCard}>
@@ -298,7 +374,7 @@ function MainApp({ profile }: { profile: Profile }) {
                 style={styles.primary}
                 onPress={() => {
                   setMatch(false);
-                  setTab("chats");
+                  navigation.navigate("Main", { screen: "Chats" });
                 }}
               >
                 <Text style={styles.primaryText}>Nachricht schreiben</Text>
@@ -325,16 +401,15 @@ function Header({ title }: { title: string }) {
   );
 }
 function Matching({
-  profile,
   passed,
   onPass,
   onLike,
 }: {
-  profile: Profile;
   passed: boolean;
   onPass: () => void;
   onLike: () => void;
 }) {
+  const profile = useContext(ProfileContext);
   return (
     <ScrollView
       contentContainerStyle={styles.screen}
@@ -350,7 +425,7 @@ function Matching({
           <Chip
             key={item}
             label={item}
-            selected={item === profile.sport}
+            selected={item === profile?.sport}
             onPress={() => undefined}
           />
         ))}
@@ -464,7 +539,9 @@ function Events() {
     </ScrollView>
   );
 }
-function ProfileScreen({ profile }: { profile: Profile }) {
+function ProfileScreen() {
+  const profile = useContext(ProfileContext);
+  if (!profile) return null;
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <Header title="Profil" />
@@ -519,6 +596,20 @@ const styles = StyleSheet.create({
     backgroundColor: C.cloud,
   },
   setup: { flexGrow: 1, padding: 24, paddingBottom: 34 },
+  welcome: { flex: 1, padding: 28, paddingBottom: 40, justifyContent: "space-between" },
+  features: { gap: 18, marginTop: 12 },
+  feature: { flexDirection: "row", alignItems: "center", gap: 14 },
+  featureIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: C.court,
+    borderWidth: 1,
+    borderColor: C.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  featureText: { color: C.ink, fontSize: 14, fontWeight: "600", flex: 1 },
   hero: { alignItems: "center", paddingVertical: 24 },
   brandMark: {
     width: 122,
@@ -600,7 +691,7 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
   primaryText: { color: C.volt, fontSize: 15, fontWeight: "800" },
-  screen: { flexGrow: 1, padding: 22, paddingBottom: 108 },
+  screen: { flexGrow: 1, padding: 22, paddingBottom: 40 },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -691,21 +782,14 @@ const styles = StyleSheet.create({
     marginBottom: 7,
   },
   tabBar: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
     height: 76,
     backgroundColor: C.court,
     borderTopWidth: 1,
     borderTopColor: C.line,
-    flexDirection: "row",
-    justifyContent: "space-around",
     paddingTop: 10,
   },
   tabItem: { alignItems: "center", width: 70 },
   tabIcon: { color: C.mist, fontSize: 25, lineHeight: 28 },
-  tabActive: { color: C.ink },
   tabLabel: { color: C.mist, fontSize: 11, fontWeight: "700", marginTop: 2 },
   chatRow: {
     flexDirection: "row",
@@ -769,7 +853,7 @@ const styles = StyleSheet.create({
   fab: {
     position: "absolute",
     right: 22,
-    bottom: 95,
+    bottom: 24,
     width: 56,
     height: 56,
     borderRadius: 18,
