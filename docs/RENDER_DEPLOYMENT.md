@@ -5,6 +5,7 @@
 The root `render.yaml` defines:
 
 - `oursport-api`: Node web service rooted at `server/`
+- `oursport-web`: Expo web static site rooted at `oursport/`
 - `oursport-db`: managed PostgreSQL database
 
 The API uses the database connection string injected by Render as `DATABASE_URL`.
@@ -61,6 +62,10 @@ The mobile app needs its own build-time variable:
 ```text
 EXPO_PUBLIC_API_URL=https://<render-service>.onrender.com
 ```
+
+The Blueprint sets the web app to `https://oursport-api.onrender.com`. If
+Render assigns a different API hostname, update `EXPO_PUBLIC_API_URL` on the
+`oursport-web` static site and redeploy it.
 
 Do not put `AUTH_JWT_SECRET` or database credentials in the Expo app.
 
