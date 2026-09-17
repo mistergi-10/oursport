@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: oursport-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: oursport-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL
+        value: "true"
+
+databases:
+  - name: oursport-db
+    databaseName: oursport
+    user: oursport
+    plan: basic-256mb

@@ -1,0 +1,11 @@
+{
+  "name": "Our Sport",
+  "short_name": "Our Sport",
+  "description": "Finde Trainingspartner nach Sportart, Level und Verfügbarkeit.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#F3F5EF",
+  "theme_color": "#C6F24C",
+  "lang": "de",
+  "icons": []
+}
