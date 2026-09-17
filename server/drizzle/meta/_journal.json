@@ -8,6 +8,13 @@
       "when": 1789665516044,
       "tag": "0000_freezing_bug",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789671276448,
+      "tag": "0001_brief_silvermane",
+      "breakpoints": true
     }
   ]
 }

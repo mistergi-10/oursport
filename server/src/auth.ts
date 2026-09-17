@@ -1,9 +1,20 @@
-import { jwtVerify } from "jose";
+import { jwtVerify, SignJWT } from "jose";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class AuthenticationError extends Error {
   statusCode = 401;
+}
+
+export async function issueToken(subject: string) {
+  const secret = process.env.AUTH_JWT_SECRET;
+  if (!secret) throw new Error("AUTH_JWT_SECRET is not configured");
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(subject)
+    .setIssuedAt()
+    .setExpirationTime("30d")
+    .sign(new TextEncoder().encode(secret));
 }
 
 export async function authenticate(headers: {

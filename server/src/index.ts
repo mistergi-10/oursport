@@ -3,9 +3,10 @@ import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { authenticate, AuthenticationError } from "./auth.js";
+import { authenticate, AuthenticationError, issueToken } from "./auth.js";
 import { getDatabase } from "./db/client.js";
 import { profiles, users } from "./db/schema.js";
+import { hashPassword, verifyPassword } from "./passwords.js";
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT ?? 10000);
@@ -15,6 +16,11 @@ const profileSchema = z.object({
   sport: z.string().trim().min(1).max(40),
   level: z.string().trim().min(1).max(40),
 });
+const credentialsSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(200),
+  password: z.string().min(8).max(200),
+});
+const signupSchema = credentialsSchema.extend(profileSchema.shape);
 
 app.register(cors, {
   origin: process.env.CORS_ORIGIN?.split(",") ?? true,
@@ -36,6 +42,58 @@ app.get("/ready", async (_request, reply) => {
   } catch {
     return reply.code(503).send({ status: "error", database: "unavailable" });
   }
+});
+
+app.post("/v1/auth/signup", async (request, reply) => {
+  const body = signupSchema.parse(request.body);
+  const database = getDatabase();
+
+  const [existing] = await database
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, body.email));
+  if (existing) return reply.code(409).send({ error: "Email is already registered" });
+
+  const authSubject = `password:${body.email}`;
+  const [user] = await database
+    .insert(users)
+    .values({ authSubject, email: body.email, passwordHash: hashPassword(body.password) })
+    .returning({ id: users.id });
+
+  const [profile] = await database
+    .insert(profiles)
+    .values({
+      userId: user.id,
+      displayName: body.name,
+      city: body.city,
+      sport: body.sport,
+      level: body.level,
+    })
+    .returning();
+
+  const token = await issueToken(authSubject);
+  return reply.code(201).send({ token, profile: toProfileResponse(profile) });
+});
+
+app.post("/v1/auth/login", async (request, reply) => {
+  const body = credentialsSchema.parse(request.body);
+  const database = getDatabase();
+
+  const [user] = await database
+    .select()
+    .from(users)
+    .where(eq(users.email, body.email));
+  if (!user?.passwordHash || !verifyPassword(body.password, user.passwordHash)) {
+    return reply.code(401).send({ error: "Invalid email or password" });
+  }
+
+  const [profile] = await database
+    .select()
+    .from(profiles)
+    .where(eq(profiles.userId, user.id));
+
+  const token = await issueToken(user.authSubject);
+  return reply.send({ token, profile: profile ? toProfileResponse(profile) : null });
 });
 
 app.get("/v1/me", async (request, reply) => {

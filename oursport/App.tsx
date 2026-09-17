@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { NavigationContainer } from "@react-navigation/native";
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+} from "@react-navigation/native";
 import {
   createNativeStackNavigator,
   type NativeStackScreenProps,
@@ -9,6 +12,7 @@ import { StatusBar } from "expo-status-bar";
 import { createContext, useContext, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -32,7 +36,8 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:10000"
 
 type RootStackParamList = {
   Welcome: undefined;
-  ProfileSetup: undefined;
+  Login: undefined;
+  Signup: undefined;
   Main: { screen?: keyof MainTabParamList } | undefined;
 };
 type MainTabParamList = {
@@ -43,7 +48,11 @@ type MainTabParamList = {
 };
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTab = createBottomTabNavigator<MainTabParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 const ProfileContext = createContext<Profile | null>(null);
+const AuthActionsContext = createContext<{ logout: () => void }>({
+  logout: () => undefined,
+});
 const tabIcons: Record<keyof MainTabParamList, string> = {
   Matching: "♡",
   Chats: "◌",
@@ -68,30 +77,56 @@ const levels = ["Anfaenger", "Fortgeschritten", "Profi"];
 
 export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    async function loadProfile() {
-      const [storedProfile, storedUserId] = await Promise.all([
+    async function bootstrap() {
+      const [storedProfile, storedUserId, storedToken] = await Promise.all([
         AsyncStorage.getItem("oursport-profile"),
         AsyncStorage.getItem("oursport-user-id"),
+        AsyncStorage.getItem("oursport-token"),
       ]);
       const nextUserId = storedUserId ?? createUserId();
       if (!storedUserId) await AsyncStorage.setItem("oursport-user-id", nextUserId);
       setUserId(nextUserId);
+      setToken(storedToken);
       if (storedProfile) setProfile(JSON.parse(storedProfile));
-      if (storedProfile) {
-        try {
-          const remoteProfile = await apiRequest<Profile>("/v1/me", nextUserId);
-          setProfile(remoteProfile);
-          await AsyncStorage.setItem("oursport-profile", JSON.stringify(remoteProfile));
-        } catch {
+      try {
+        const auth = storedToken ? { token: storedToken } : { userId: nextUserId };
+        const remoteProfile = await apiRequest<Profile>("/v1/me", auth);
+        setProfile(remoteProfile);
+        await AsyncStorage.setItem("oursport-profile", JSON.stringify(remoteProfile));
+      } catch {
+        if (storedToken) {
+          await AsyncStorage.multiRemove(["oursport-token", "oursport-profile"]);
+          setToken(null);
+          setProfile(null);
         }
       }
       setLoading(false);
     }
-    void loadProfile();
+    void bootstrap();
   }, []);
+
+  const handleAuthenticated = async (nextToken: string, nextProfile: Profile) => {
+    await AsyncStorage.multiSet([
+      ["oursport-token", nextToken],
+      ["oursport-profile", JSON.stringify(nextProfile)],
+    ]);
+    setToken(nextToken);
+    setProfile(nextProfile);
+  };
+
+  const authActions = {
+    logout: () => {
+      void AsyncStorage.multiRemove(["oursport-token", "oursport-profile"]);
+      setToken(null);
+      setProfile(null);
+      navigationRef.current?.reset({ index: 0, routes: [{ name: "Welcome" }] });
+    },
+  };
+
   if (loading)
     return (
       <View style={styles.loading}>
@@ -100,35 +135,57 @@ export default function App() {
     );
   return (
     <ProfileContext.Provider value={profile}>
-      <NavigationContainer>
-        <RootStack.Navigator
-          screenOptions={{ headerShown: false }}
-          initialRouteName={profile ? "Main" : "Welcome"}
-        >
-          <RootStack.Screen name="Welcome">
-            {({ navigation }) => (
-              <WelcomeScreen onStart={() => navigation.navigate("ProfileSetup")} />
-            )}
-          </RootStack.Screen>
-          <RootStack.Screen name="ProfileSetup">
-            {({ navigation }) => (
-              <ProfileSetup
-                userId={userId}
-                onComplete={(nextProfile) => {
-                  setProfile(nextProfile);
-                  navigation.reset({ index: 0, routes: [{ name: "Main" }] });
-                }}
-              />
-            )}
-          </RootStack.Screen>
-          <RootStack.Screen name="Main" component={MainTabs} />
-        </RootStack.Navigator>
-      </NavigationContainer>
+      <AuthActionsContext.Provider value={authActions}>
+        <NavigationContainer ref={navigationRef}>
+          <RootStack.Navigator
+            screenOptions={{ headerShown: false }}
+            initialRouteName={profile ? "Main" : "Welcome"}
+          >
+            <RootStack.Screen name="Welcome">
+              {({ navigation }) => (
+                <WelcomeScreen
+                  onCreateAccount={() => navigation.navigate("Signup")}
+                  onLogin={() => navigation.navigate("Login")}
+                />
+              )}
+            </RootStack.Screen>
+            <RootStack.Screen name="Login">
+              {({ navigation }) => (
+                <LoginScreen
+                  onSwitchToSignup={() => navigation.navigate("Signup")}
+                  onAuthenticated={async (nextToken, nextProfile) => {
+                    await handleAuthenticated(nextToken, nextProfile);
+                    navigation.reset({ index: 0, routes: [{ name: "Main" }] });
+                  }}
+                />
+              )}
+            </RootStack.Screen>
+            <RootStack.Screen name="Signup">
+              {({ navigation }) => (
+                <SignupScreen
+                  onSwitchToLogin={() => navigation.navigate("Login")}
+                  onAuthenticated={async (nextToken, nextProfile) => {
+                    await handleAuthenticated(nextToken, nextProfile);
+                    navigation.reset({ index: 0, routes: [{ name: "Main" }] });
+                  }}
+                />
+              )}
+            </RootStack.Screen>
+            <RootStack.Screen name="Main" component={MainTabs} />
+          </RootStack.Navigator>
+        </NavigationContainer>
+      </AuthActionsContext.Provider>
     </ProfileContext.Provider>
   );
 }
 
-function WelcomeScreen({ onStart }: { onStart: () => void }) {
+function WelcomeScreen({
+  onCreateAccount,
+  onLogin,
+}: {
+  onCreateAccount: () => void;
+  onLogin: () => void;
+}) {
   const features: [string, string][] = [
     ["♥", "Finde Trainingspartner, die zu deinem Level passen"],
     ["◌", "Chatte direkt und plant euer naechstes Training"],
@@ -155,11 +212,29 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
             </View>
           ))}
         </View>
-        <Pressable style={styles.primary} onPress={onStart}>
-          <Text style={styles.primaryText}>Los geht's</Text>
+        <Pressable style={styles.primary} onPress={onCreateAccount}>
+          <Text style={styles.primaryText}>Konto erstellen</Text>
+        </Pressable>
+        <Pressable style={styles.secondary} onPress={onLogin}>
+          <Text style={styles.secondaryText}>Ich habe schon ein Konto</Text>
         </Pressable>
       </View>
     </SafeAreaView>
+  );
+}
+
+function SocialAuthButtons() {
+  const notify = () =>
+    Alert.alert("Bald verfuegbar", "Login mit Google und Apple folgt in Kuerze.");
+  return (
+    <View style={styles.socialRow}>
+      <Pressable style={styles.socialButton} onPress={notify}>
+        <Text style={styles.socialButtonText}>Mit Google fortfahren</Text>
+      </Pressable>
+      <Pressable style={styles.socialButton} onPress={notify}>
+        <Text style={styles.socialButtonText}>Mit Apple fortfahren</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -171,17 +246,34 @@ function createUserId() {
   });
 }
 
-async function apiRequest<T>(path: string, userId: string, options?: RequestInit) {
+type Auth = { token?: string; userId?: string };
+
+async function apiRequest<T>(path: string, auth: Auth, options?: RequestInit) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       "content-type": "application/json",
-      "x-user-id": userId,
+      ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
+      ...(auth.userId ? { "x-user-id": auth.userId } : {}),
       ...options?.headers,
     },
   });
   if (!response.ok) throw new Error(`API request failed: ${response.status}`);
   return (await response.json()) as T;
+}
+
+async function authRequest<T>(path: string, body: unknown) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = (payload as { error?: string } | null)?.error;
+    throw new Error(message ?? "Anfrage fehlgeschlagen");
+  }
+  return payload as T;
 }
 
 function BrandMark() {
@@ -195,38 +287,47 @@ function BrandMark() {
   );
 }
 
-function ProfileSetup({
-  userId,
-  onComplete,
+function SignupScreen({
+  onAuthenticated,
+  onSwitchToLogin,
 }: {
-  userId: string | null;
-  onComplete: (profile: Profile) => void;
+  onAuthenticated: (token: string, profile: Profile) => void | Promise<void>;
+  onSwitchToLogin: () => void;
 }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [city, setCity] = useState("");
   const [sport, setSport] = useState("Laufen");
   const [level, setLevel] = useState("Fortgeschritten");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
   const save = async () => {
-    const next = {
-      name: name.trim() || "Alex",
-      city: city.trim() || "Olten",
-      sport,
-      level,
-    };
-    if (userId) {
-      try {
-        const remoteProfile = await apiRequest<Profile>("/v1/profiles", userId, {
-          method: "POST",
-          body: JSON.stringify(next),
-        });
-        await AsyncStorage.setItem("oursport-profile", JSON.stringify(remoteProfile));
-        onComplete(remoteProfile);
-        return;
-      } catch {
-      }
+    if (!email.trim() || password.length < 8) {
+      setError("Bitte E-Mail und ein Passwort mit mind. 8 Zeichen angeben.");
+      return;
     }
-    await AsyncStorage.setItem("oursport-profile", JSON.stringify(next));
-    onComplete(next);
+    setError(null);
+    setSubmitting(true);
+    try {
+      const { token, profile } = await authRequest<{ token: string; profile: Profile }>(
+        "/v1/auth/signup",
+        {
+          email: email.trim(),
+          password,
+          name: name.trim() || "Alex",
+          city: city.trim() || "Olten",
+          sport,
+          level,
+        },
+      );
+      await onAuthenticated(token, profile);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Registrierung fehlgeschlagen");
+    } finally {
+      setSubmitting(false);
+    }
   };
   return (
     <SafeAreaView style={styles.safe}>
@@ -239,10 +340,29 @@ function ProfileSetup({
             mehr Spass.
           </Text>
         </View>
-        <Text style={styles.title}>Dein Profil</Text>
+        <Text style={styles.title}>Konto erstellen</Text>
         <Text style={styles.helper}>
           Nur 3 kurze Schritte bis zu deinem ersten Match.
         </Text>
+        <Text style={styles.label}>E-Mail</Text>
+        <TextInput
+          value={email}
+          onChangeText={setEmail}
+          placeholder="du@beispiel.ch"
+          placeholderTextColor={C.mist}
+          style={styles.input}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+        <Text style={styles.label}>Passwort</Text>
+        <TextInput
+          value={password}
+          onChangeText={setPassword}
+          placeholder="Mind. 8 Zeichen"
+          placeholderTextColor={C.mist}
+          style={styles.input}
+          secureTextEntry
+        />
         <Text style={styles.label}>Name</Text>
         <TextInput
           value={name}
@@ -284,19 +404,86 @@ function ProfileSetup({
             </Pressable>
           ))}
         </View>
-        <Text style={styles.label}>Verfuegbarkeit</Text>
-        <View style={styles.chips}>
-          {["Mo", "Mi", "Fr", "Sa", "So"].map((item) => (
-            <Chip
-              key={item}
-              label={item}
-              selected={["Mo", "Mi", "Sa"].includes(item)}
-              onPress={() => undefined}
-            />
-          ))}
+        {error && <Text style={styles.errorText}>{error}</Text>}
+        <Pressable style={styles.primary} onPress={save} disabled={submitting}>
+          <Text style={styles.primaryText}>
+            {submitting ? "Wird erstellt..." : "Konto erstellen"}
+          </Text>
+        </Pressable>
+        <SocialAuthButtons />
+        <Pressable onPress={onSwitchToLogin}>
+          <Text style={styles.switchLink}>Ich habe schon ein Konto</Text>
+        </Pressable>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function LoginScreen({
+  onAuthenticated,
+  onSwitchToSignup,
+}: {
+  onAuthenticated: (token: string, profile: Profile) => void | Promise<void>;
+  onSwitchToSignup: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const login = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const { token, profile } = await authRequest<{ token: string; profile: Profile | null }>(
+        "/v1/auth/login",
+        { email: email.trim(), password },
+      );
+      if (!profile) throw new Error("Kein Profil gefunden");
+      await onAuthenticated(token, profile);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Anmeldung fehlgeschlagen");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.setup}>
+        <View style={styles.hero}>
+          <BrandMark />
+          <Text style={styles.wordmark}>Our Sport</Text>
+          <Text style={styles.tagline}>Schoen, dich wiederzusehen.</Text>
         </View>
-        <Pressable style={styles.primary} onPress={save}>
-          <Text style={styles.primaryText}>Profil erstellen</Text>
+        <Text style={styles.title}>Anmelden</Text>
+        <Text style={styles.label}>E-Mail</Text>
+        <TextInput
+          value={email}
+          onChangeText={setEmail}
+          placeholder="du@beispiel.ch"
+          placeholderTextColor={C.mist}
+          style={styles.input}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+        <Text style={styles.label}>Passwort</Text>
+        <TextInput
+          value={password}
+          onChangeText={setPassword}
+          placeholder="Dein Passwort"
+          placeholderTextColor={C.mist}
+          style={styles.input}
+          secureTextEntry
+        />
+        {error && <Text style={styles.errorText}>{error}</Text>}
+        <Pressable style={styles.primary} onPress={login} disabled={submitting}>
+          <Text style={styles.primaryText}>
+            {submitting ? "Wird geprueft..." : "Anmelden"}
+          </Text>
+        </Pressable>
+        <SocialAuthButtons />
+        <Pressable onPress={onSwitchToSignup}>
+          <Text style={styles.switchLink}>Neues Konto erstellen</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>
@@ -541,6 +728,7 @@ function Events() {
 }
 function ProfileScreen() {
   const profile = useContext(ProfileContext);
+  const { logout } = useContext(AuthActionsContext);
   if (!profile) return null;
   return (
     <ScrollView contentContainerStyle={styles.screen}>
@@ -582,6 +770,10 @@ function ProfileScreen() {
           <Text style={styles.arrow}>›</Text>
         </View>
       ))}
+      <Pressable style={styles.settings} onPress={logout}>
+        <Text style={[styles.settingsText, { color: C.ember }]}>Abmelden</Text>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -691,6 +883,32 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
   primaryText: { color: C.volt, fontSize: 15, fontWeight: "800" },
+  secondary: {
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: C.line,
+  },
+  secondaryText: { color: C.ink, fontSize: 15, fontWeight: "800" },
+  socialRow: { gap: 10, marginTop: 14 },
+  socialButton: {
+    backgroundColor: C.court,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 15,
+  },
+  socialButtonText: { color: C.ink, fontSize: 14, fontWeight: "700" },
+  switchLink: {
+    color: C.mist,
+    textAlign: "center",
+    marginTop: 20,
+    fontWeight: "700",
+  },
+  errorText: { color: C.ember, fontSize: 13, marginTop: 16, fontWeight: "600" },
   screen: { flexGrow: 1, padding: 22, paddingBottom: 40 },
   header: {
     flexDirection: "row",
