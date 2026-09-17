@@ -4,7 +4,7 @@ services:
     runtime: node
     rootDir: server
     buildCommand: npm ci && npm run build
-    preDeployCommand: npm run db:migrate
+    preDeployCommand: node dist/db/migrate.js
     startCommand: npm start
     healthCheckPath: /health
     envVars:
