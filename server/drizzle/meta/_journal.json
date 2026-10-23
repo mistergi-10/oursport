@@ -15,6 +15,41 @@
       "when": 1789671276448,
       "tag": "0001_brief_silvermane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792772724982,
+      "tag": "0002_talented_the_renegades",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792773867108,
+      "tag": "0003_rainy_darkhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792774914856,
+      "tag": "0004_romantic_blizzard",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792780241960,
+      "tag": "0005_warm_multiple_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792781493595,
+      "tag": "0006_boring_onslaught",
+      "breakpoints": true
     }
   ]
 }

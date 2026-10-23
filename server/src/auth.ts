@@ -6,10 +6,10 @@ export class AuthenticationError extends Error {
   statusCode = 401;
 }
 
-export async function issueToken(subject: string) {
+export async function issueToken(subject: string, tokenVersion: number) {
   const secret = process.env.AUTH_JWT_SECRET;
   if (!secret) throw new Error("AUTH_JWT_SECRET is not configured");
-  return new SignJWT({})
+  return new SignJWT({ tokenVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(subject)
     .setIssuedAt()
@@ -20,7 +20,7 @@ export async function issueToken(subject: string) {
 export async function authenticate(headers: {
   authorization?: string | string[];
   "x-user-id"?: string | string[];
-}) {
+}): Promise<{ subject: string; userId?: string; tokenVersion?: number }> {
   const authorization = Array.isArray(headers.authorization)
     ? headers.authorization[0]
     : headers.authorization;
@@ -33,7 +33,8 @@ export async function authenticate(headers: {
         new TextEncoder().encode(secret),
       );
       if (typeof payload.sub === "string" && payload.sub.length > 0) {
-        return { subject: payload.sub };
+        const tokenVersion = typeof payload.tokenVersion === "number" ? payload.tokenVersion : 0;
+        return { subject: payload.sub, tokenVersion };
       }
     } catch {
       throw new AuthenticationError("Invalid bearer token");

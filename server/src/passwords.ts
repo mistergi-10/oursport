@@ -16,3 +16,7 @@ export function verifyPassword(password: string, stored: string) {
   if (derived.length !== hashBuffer.length) return false;
   return timingSafeEqual(derived, hashBuffer);
 }
+
+// Fixed decoy hash so callers can run a real scrypt compare for unknown
+// emails too, equalizing login timing and closing an enumeration side-channel.
+export const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(32).toString("hex"));
