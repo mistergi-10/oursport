@@ -2588,8 +2588,7 @@ function createStyles(C: Palette) {
     alignItems: "center",
     paddingVertical: 13,
   },
-  levelSelected: { backgroundColor: C.volt, borderColor: C.volt },
-  levelSelectedText: { color: INK_FIXED, fontSize: 13, fontWeight: "700" },
+  levelSelected: { backgroundColor: INK_FIXED, borderColor: INK_FIXED },
   primary: {
     backgroundColor: INK_FIXED,
     borderRadius: 16,
