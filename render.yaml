@@ -16,6 +16,10 @@ services:
         value: production
       - key: DATABASE_SSL
         value: "true"
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: https://oursport-web.onrender.com
 
   - type: web
     name: oursport-web
@@ -26,6 +30,10 @@ services:
     envVars:
       - key: EXPO_PUBLIC_API_URL
         value: https://oursport-api.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
 
 databases:
   - name: oursport-db

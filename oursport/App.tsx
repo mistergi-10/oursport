@@ -356,7 +356,9 @@ async function apiRequest<T>(path: string, auth: Auth, options?: RequestInit) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
-      "content-type": "application/json",
+      // Only a non-empty body gets a JSON content-type; Fastify rejects an empty
+      // body sent with "content-type: application/json" (join/leave event, unblock).
+      ...(options?.body ? { "content-type": "application/json" } : {}),
       ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
       ...(auth.userId ? { "x-user-id": auth.userId } : {}),
       ...options?.headers,
@@ -1033,7 +1035,9 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
             key={item}
             label={item}
             selected={item === profile?.sport}
-            onPress={() => undefined}
+            onPress={() =>
+              Alert.alert("Bald verfuegbar", "Filtern nach Sportart folgt in Kuerze.")
+            }
           />
         ))}
       </ScrollView>
@@ -2001,23 +2005,10 @@ function ProfileScreen() {
             {profile.name[0]?.toUpperCase()}
           </Text>
         </View>
-        <Text style={styles.profileName}>{profile.name}, 29</Text>
+        <Text style={styles.profileName}>{profile.name}</Text>
         <Text style={styles.profileSub}>
           {profile.city} · {profile.sport}
         </Text>
-        <Text style={styles.verified}>✓ Telefonnummer verifiziert</Text>
-      </View>
-      <View style={styles.stats}>
-        {[
-          ["18", "Trainings"],
-          ["4.9", "Bewertung"],
-          ["6", "Matches"],
-        ].map(([value, label]) => (
-          <View style={styles.stat} key={label}>
-            <Text style={styles.statValue}>{value}</Text>
-            <Text style={styles.statLabel}>{label}</Text>
-          </View>
-        ))}
       </View>
       <Text style={styles.label}>Konto</Text>
       {[
@@ -2026,10 +2017,14 @@ function ProfileScreen() {
         "Verfuegbarkeit",
         "Standortdienste",
       ].map((item) => (
-        <View style={styles.settings} key={item}>
+        <Pressable
+          style={styles.settings}
+          key={item}
+          onPress={() => Alert.alert("Bald verfuegbar", `${item} folgt in Kuerze.`)}
+        >
           <Text style={styles.settingsText}>{item}</Text>
           <Text style={styles.arrow}>›</Text>
-        </View>
+        </Pressable>
       ))}
       <Pressable style={styles.settings} onPress={() => navigation.navigate("Privacy")}>
         <Text style={styles.settingsText}>Daten & DSGVO</Text>

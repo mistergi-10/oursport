@@ -104,6 +104,23 @@ app.register(cors, {
   origin: process.env.CORS_ORIGIN?.split(",") ?? true,
 });
 
+// Tolerates a body-less request sent with "content-type: application/json" (e.g.
+// join/leave event, unblock) instead of the default 400, since those routes never
+// require a body in the first place.
+app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+  if (body === "") {
+    done(null, undefined);
+    return;
+  }
+  try {
+    done(null, JSON.parse(body as string));
+  } catch (error) {
+    const parseError = error as Error & { statusCode?: number };
+    parseError.statusCode = 400;
+    done(parseError, undefined);
+  }
+});
+
 app.register(rateLimit, {
   global: false,
   errorResponseBuilder: () => ({ error: "Too many requests" }),
