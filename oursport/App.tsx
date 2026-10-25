@@ -12,22 +12,50 @@ import {
 } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { StatusBar } from "expo-status-bar";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 
-const C = {
+// `ink`/`mist`/`cloud`/`court`/`line` flip between themes; a handful of brand
+// surfaces (primary buttons, selected chips, the match overlay) intentionally
+// stay a fixed near-black with volt text in both themes, so those few spots
+// use the literal INK_FIXED/COURT_FIXED colors below instead of the palette.
+const INK_FIXED = "#12181A";
+const COURT_FIXED = "#FFFFFF";
+type Palette = {
+  ink: string;
+  cloud: string;
+  court: string;
+  volt: string;
+  ember: string;
+  mist: string;
+  line: string;
+};
+const lightPalette: Palette = {
   ink: "#12181A",
   cloud: "#F3F5EF",
   court: "#FFFFFF",
@@ -36,7 +64,61 @@ const C = {
   mist: "#778078",
   line: "#E1E6DD",
 };
-type Profile = { userId: string; name: string; city: string; sport: string; level: string };
+const darkPalette: Palette = {
+  ink: "#F3F5EF",
+  cloud: "#12181A",
+  court: "#1C2422",
+  volt: "#C6F24C",
+  ember: "#FF7A57",
+  mist: "#8FA398",
+  line: "#2B3634",
+};
+type ColorScheme = "light" | "dark";
+const THEME_STORAGE_KEY = "oursport-theme";
+const ThemeContext = createContext<{
+  palette: Palette;
+  styles: ReturnType<typeof createStyles>;
+  scheme: ColorScheme;
+  toggleScheme: () => void;
+}>({
+  palette: lightPalette,
+  styles: createStyles(lightPalette),
+  scheme: "light",
+  toggleScheme: () => undefined,
+});
+function useTheme() {
+  return useContext(ThemeContext);
+}
+function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [scheme, setScheme] = useState<ColorScheme>("light");
+  useEffect(() => {
+    void AsyncStorage.getItem(THEME_STORAGE_KEY).then((stored) => {
+      if (stored === "dark" || stored === "light") setScheme(stored);
+    });
+  }, []);
+  const toggleScheme = useCallback(() => {
+    setScheme((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      void AsyncStorage.setItem(THEME_STORAGE_KEY, next);
+      return next;
+    });
+  }, []);
+  const palette = scheme === "dark" ? darkPalette : lightPalette;
+  const styles = useMemo(() => createStyles(palette), [palette]);
+  return (
+    <ThemeContext.Provider value={{ palette, styles, scheme, toggleScheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+type Profile = {
+  userId: string;
+  name: string;
+  city: string;
+  sport: string;
+  level: string;
+  photoUrl: string | null;
+};
 type Candidate = {
   userId: string;
   name: string;
@@ -44,6 +126,7 @@ type Candidate = {
   sport: string;
   level: string;
   bio: string | null;
+  photoUrl: string | null;
 };
 type LastMessage = { body: string; senderUserId: string; createdAt: string };
 type ConversationSummary = {
@@ -53,7 +136,9 @@ type ConversationSummary = {
   name: string;
   city: string;
   sport: string;
+  photoUrl: string | null;
   lastMessage: LastMessage | null;
+  lastMessageReadByOther: boolean;
   updatedAt: string;
 };
 type ConversationMessage = {
@@ -108,15 +193,16 @@ const RootStack = createNativeStackNavigator<RootStackParamList>();
 const MainTab = createBottomTabNavigator<MainTabParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 const ProfileContext = createContext<Profile | null>(null);
-const AuthActionsContext = createContext<{ logout: () => void }>({
+const AuthActionsContext = createContext<{ logout: () => void; updateProfile: (profile: Profile) => void }>({
   logout: () => undefined,
+  updateProfile: () => undefined,
 });
 const AuthContext = createContext<Auth>({});
-const tabIcons: Record<keyof MainTabParamList, string> = {
-  Matching: "♡",
-  Chats: "◌",
-  Events: "□",
-  Profile: "○",
+const tabIcons: Record<keyof MainTabParamList, keyof typeof Ionicons.glyphMap> = {
+  Matching: "heart",
+  Chats: "chatbubble-ellipses",
+  Events: "calendar",
+  Profile: "person-circle",
 };
 const tabLabels: Record<keyof MainTabParamList, string> = {
   Matching: "Matching",
@@ -135,6 +221,15 @@ const sports = [
 const levels = ["Anfaenger", "Fortgeschritten", "Profi"];
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  );
+}
+
+function AppInner() {
+  const { palette: C, styles } = useTheme();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -183,6 +278,10 @@ export default function App() {
       setToken(null);
       setProfile(null);
       navigationRef.current?.reset({ index: 0, routes: [{ name: "Welcome" }] });
+    },
+    updateProfile: (nextProfile: Profile) => {
+      setProfile(nextProfile);
+      void AsyncStorage.setItem("oursport-profile", JSON.stringify(nextProfile));
     },
   };
 
@@ -284,10 +383,11 @@ function WelcomeScreen({
   onCreateAccount: () => void;
   onLogin: () => void;
 }) {
-  const features: [string, string][] = [
-    ["♥", "Finde Trainingspartner, die zu deinem Level passen"],
-    ["◌", "Chatte direkt und plant euer naechstes Training"],
-    ["□", "Entdecke lokale Sport-Events in deiner Naehe"],
+  const { palette: C, styles } = useTheme();
+  const features: [keyof typeof Ionicons.glyphMap, string][] = [
+    ["heart", "Finde Trainingspartner, die zu deinem Level passen"],
+    ["chatbubble-ellipses", "Chatte direkt und plant euer naechstes Training"],
+    ["calendar", "Entdecke lokale Sport-Events in deiner Naehe"],
   ];
   return (
     <SafeAreaView style={styles.safe}>
@@ -304,7 +404,7 @@ function WelcomeScreen({
           {features.map(([icon, text]) => (
             <View style={styles.feature} key={text}>
               <View style={styles.featureIcon}>
-                <Text style={styles.tabIcon}>{icon}</Text>
+                <Ionicons name={icon} size={20} color={C.ink} />
               </View>
               <Text style={styles.featureText}>{text}</Text>
             </View>
@@ -322,6 +422,7 @@ function WelcomeScreen({
 }
 
 function SocialAuthButtons() {
+  const { styles } = useTheme();
   const notify = () =>
     Alert.alert("Bald verfuegbar", "Login mit Google und Apple folgt in Kuerze.");
   return (
@@ -394,6 +495,7 @@ async function authRequest<T>(path: string, body: unknown) {
 }
 
 function BrandMark() {
+  const { styles } = useTheme();
   return (
     <View style={styles.brandMark}>
       <Text style={styles.brandSymbol}>O</Text>
@@ -411,6 +513,7 @@ function SignupScreen({
   onAuthenticated: (token: string, profile: Profile) => void | Promise<void>;
   onSwitchToLogin: () => void;
 }) {
+  const { palette: C, styles } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -547,6 +650,7 @@ function LoginScreen({
   onForgotPassword: () => void;
   successMessage?: string;
 }) {
+  const { palette: C, styles } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -622,6 +726,7 @@ function ForgotPasswordScreen({
   onCodeRequested: (email: string, devCode?: string) => void;
   onBackToLogin: () => void;
 }) {
+  const { palette: C, styles } = useTheme();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -710,6 +815,7 @@ function ResetPasswordScreen({
   devCode?: string;
   onSuccess: () => void;
 }) {
+  const { palette: C, styles } = useTheme();
   const [emailValue, setEmailValue] = useState(email);
   const [code, setCode] = useState(devCode ?? "");
   const [newPassword, setNewPassword] = useState("");
@@ -799,6 +905,7 @@ function Chip({
   selected: boolean;
   onPress: () => void;
 }) {
+  const { styles } = useTheme();
   return (
     <Pressable
       style={[styles.chip, selected && styles.chipSelected]}
@@ -818,6 +925,7 @@ function Checkbox({
   onPress: () => void;
   label: string;
 }) {
+  const { styles } = useTheme();
   return (
     <Pressable style={styles.checkboxRow} onPress={onPress}>
       <View style={[styles.checkboxBox, checked && styles.checkboxBoxChecked]}>
@@ -829,10 +937,11 @@ function Checkbox({
 }
 
 function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Main">) {
+  const { palette: C, styles, scheme } = useTheme();
   const [activeMatch, setActiveMatch] = useState<MatchInfo | null>(null);
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+      <StatusBar style={scheme === "dark" ? "light" : "dark"} />
       <View style={styles.flex}>
         <MainTab.Navigator
           screenOptions={({ route }) => ({
@@ -846,10 +955,12 @@ function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Ma
                 {tabLabels[route.name]}
               </Text>
             ),
-            tabBarIcon: ({ color }) => (
-              <Text style={[styles.tabIcon, { color }]}>
-                {tabIcons[route.name]}
-              </Text>
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? tabIcons[route.name] : `${tabIcons[route.name]}-outline` as keyof typeof Ionicons.glyphMap}
+                size={24}
+                color={color}
+              />
             ),
           })}
         >
@@ -863,7 +974,7 @@ function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Ma
         {activeMatch && (
           <View style={styles.overlay}>
             <View style={styles.overlayCard}>
-              <Text style={styles.overlayHeart}>♥</Text>
+              <Ionicons name="heart" size={40} color={C.volt} />
               <Text style={styles.overlayTitle}>Es ist ein Match!</Text>
               <Text style={styles.overlayBody}>
                 Du und {activeMatch.name} wollt beide {activeMatch.sport} gehen.
@@ -891,24 +1002,25 @@ function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Ma
 
 function Header({
   title,
-  actionIcon = "☷",
+  actionIcon = "options-outline",
   onAction,
 }: {
   title: string;
-  actionIcon?: string;
+  actionIcon?: keyof typeof Ionicons.glyphMap;
   onAction?: () => void;
 }) {
+  const { palette: C, styles } = useTheme();
   return (
     <View style={styles.header}>
       <Text style={styles.headerTitle}>{title}</Text>
       <Pressable style={styles.filter} onPress={onAction}>
-        <Text>{actionIcon}</Text>
+        <Ionicons name={actionIcon} size={18} color={C.ink} />
       </Pressable>
     </View>
   );
 }
 function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
-  const profile = useContext(ProfileContext);
+  const { palette: C, styles } = useTheme();
   const auth = useContext(AuthContext);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList, "Main">>();
@@ -919,13 +1031,17 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
   const [loadError, setLoadError] = useState(false);
   const [swipeError, setSwipeError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [sportFilter, setSportFilter] = useState<string | null>(null);
 
   const loadCandidates = useCallback(
     async (afterCursor: string | null) => {
       setLoading(true);
       setLoadError(false);
       try {
-        const query = afterCursor ? `?cursor=${encodeURIComponent(afterCursor)}` : "";
+        const params: string[] = [];
+        if (sportFilter) params.push(`sport=${encodeURIComponent(sportFilter)}`);
+        if (afterCursor) params.push(`cursor=${encodeURIComponent(afterCursor)}`);
+        const query = params.length > 0 ? `?${params.join("&")}` : "";
         const response = await apiRequest<{ candidates: Candidate[]; nextCursor: string | null }>(
           `/v1/discover${query}`,
           auth,
@@ -941,7 +1057,7 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
         setLoading(false);
       }
     },
-    [auth.token, auth.userId],
+    [auth.token, auth.userId, sportFilter],
   );
 
   useFocusEffect(
@@ -1034,10 +1150,8 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
           <Chip
             key={item}
             label={item}
-            selected={item === profile?.sport}
-            onPress={() =>
-              Alert.alert("Bald verfuegbar", "Filtern nach Sportart folgt in Kuerze.")
-            }
+            selected={sportFilter === item}
+            onPress={() => setSportFilter((current) => (current === item ? null : item))}
           />
         ))}
       </ScrollView>
@@ -1063,9 +1177,13 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
         <>
           <View style={styles.matchCard}>
             <View style={styles.photo}>
-              <Text style={styles.photoEmoji}>🏃</Text>
+              {current.photoUrl ? (
+                <Image source={{ uri: current.photoUrl }} style={styles.photoImage} />
+              ) : (
+                <Text style={styles.photoEmoji}>🏃</Text>
+              )}
               <Pressable style={styles.cardMenuButton} onPress={() => openCardMenu(current)}>
-                <Text style={styles.cardMenuButtonText}>⋯</Text>
+                <Ionicons name="ellipsis-horizontal" size={18} color={C.ink} />
               </Pressable>
             </View>
             <View style={styles.cardBody}>
@@ -1085,10 +1203,10 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
           )}
           <View style={styles.actions}>
             <Pressable style={styles.pass} onPress={() => swipe("pass")} disabled={submitting}>
-              <Text style={styles.actionText}>×</Text>
+              <Ionicons name="close" size={30} color={C.ink} />
             </Pressable>
             <Pressable style={styles.like} onPress={() => swipe("like")} disabled={submitting}>
-              <Text style={styles.likeText}>♥</Text>
+              <Ionicons name="heart" size={24} color={COURT_FIXED} />
             </Pressable>
           </View>
         </>
@@ -1100,7 +1218,6 @@ function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
     </ScrollView>
   );
 }
-const matchAvatarColors = [C.ember, "#69B7EA", "#A98BEE"];
 function formatRelativeTime(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diffMs / 60000);
@@ -1118,6 +1235,8 @@ function formatMessageTime(iso: string) {
 // null (or a message rate outpacing the client) can't page indefinitely.
 const MAX_POLL_PAGES = 25;
 function MatchesList() {
+  const { palette: C, styles } = useTheme();
+  const matchAvatarColors = [C.ember, "#69B7EA", "#A98BEE"];
   const auth = useContext(AuthContext);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList, "Main">>();
@@ -1203,7 +1322,11 @@ function MatchesList() {
                   { backgroundColor: matchAvatarColors[index % matchAvatarColors.length] },
                 ]}
               >
-                <Text style={styles.avatarLetter}>{item.name[0]?.toUpperCase()}</Text>
+                {item.photoUrl ? (
+                  <Image source={{ uri: item.photoUrl }} style={styles.avatarImage} />
+                ) : (
+                  <Text style={styles.avatarLetter}>{item.name[0]?.toUpperCase()}</Text>
+                )}
               </View>
               <View style={styles.chatInfo}>
                 <Text style={styles.chatName}>{item.name}</Text>
@@ -1211,7 +1334,12 @@ function MatchesList() {
                   {item.lastMessage ? item.lastMessage.body : "Sag Hallo 👋"}
                 </Text>
               </View>
-              <Text style={styles.chatTime}>{formatRelativeTime(item.updatedAt)}</Text>
+              <View style={styles.chatMeta}>
+                <Text style={styles.chatTime}>{formatRelativeTime(item.updatedAt)}</Text>
+                {item.lastMessageReadByOther && (
+                  <Ionicons name="checkmark-done" size={14} color={C.volt} />
+                )}
+              </View>
             </Pressable>
           ))}
           {nextCursor && (
@@ -1233,6 +1361,7 @@ function ConversationScreen({
   route,
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Conversation">) {
+  const { palette: C, styles } = useTheme();
   const { conversationId, name, userId: otherUserId } = route.params;
   const auth = useContext(AuthContext);
   const profile = useContext(ProfileContext);
@@ -1249,6 +1378,12 @@ function ConversationScreen({
     unavailableRef.current = true;
     setUnavailable(true);
   }, []);
+
+  const markRead = useCallback(() => {
+    apiRequest(`/v1/conversations/${conversationId}/read`, auth, { method: "POST" }).catch(() => {
+      // best-effort; a missed read receipt isn't worth surfacing to the user
+    });
+  }, [auth.token, auth.userId, conversationId]);
 
   function sortMessages(list: ConversationMessage[]) {
     return [...list].sort((a, b) => {
@@ -1330,6 +1465,7 @@ function ConversationScreen({
   useFocusEffect(
     useCallback(() => {
       void loadInitial();
+      markRead();
       // Guards against overlapping ticks if a poll (e.g. a slow response, or the
       // multi-page catch-up loop above) takes longer than the interval itself.
       let pollInFlight = false;
@@ -1342,10 +1478,11 @@ function ConversationScreen({
         pollInFlight = true;
         void poll().finally(() => {
           pollInFlight = false;
+          markRead();
         });
       }, 4000);
       return () => clearInterval(interval);
-    }, [loadInitial, poll]),
+    }, [loadInitial, poll, markRead]),
   );
 
   const send = async () => {
@@ -1412,11 +1549,11 @@ function ConversationScreen({
       >
         <View style={styles.conversationHeader}>
           <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backArrow}>‹</Text>
+            <Ionicons name="chevron-back" size={24} color={C.ink} />
           </Pressable>
           <Text style={styles.headerTitle}>{name}</Text>
           <Pressable onPress={openMenu} style={styles.backButton} disabled={unavailable}>
-            {!unavailable && <Text style={styles.cardMenuButtonText}>⋯</Text>}
+            {!unavailable && <Ionicons name="ellipsis-horizontal" size={18} color={C.ink} />}
           </Pressable>
         </View>
         {unavailable ? (
@@ -1472,7 +1609,7 @@ function ConversationScreen({
               multiline
             />
             <Pressable style={styles.sendButton} onPress={send} disabled={sending || !draft.trim()}>
-              <Text style={styles.sendButtonText}>{sending ? "..." : "➤"}</Text>
+              {sending ? <ActivityIndicator color={C.volt} size="small" /> : <Ionicons name="send" size={18} color={C.volt} />}
             </Pressable>
           </View>
         )}
@@ -1501,6 +1638,7 @@ function eventJoinLabel(event: EventSummary) {
 }
 
 function Events() {
+  const { palette: C, styles } = useTheme();
   const auth = useContext(AuthContext);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList, "Main">>();
@@ -1611,7 +1749,7 @@ function Events() {
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
-      <Header title="Events" actionIcon="+" onAction={() => navigation.navigate("CreateEvent")} />
+      <Header title="Events" actionIcon="add" onAction={() => navigation.navigate("CreateEvent")} />
       <TextInput
         value={cityFilter}
         onChangeText={setCityFilter}
@@ -1722,6 +1860,7 @@ function Events() {
 function CreateEventScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "CreateEvent">) {
+  const { palette: C, styles } = useTheme();
   const auth = useContext(AuthContext);
   const profile = useContext(ProfileContext);
   const [title, setTitle] = useState("");
@@ -1783,7 +1922,7 @@ function CreateEventScreen({
     <SafeAreaView style={styles.safe}>
       <View style={styles.conversationHeader}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backArrow}>‹</Text>
+          <Ionicons name="chevron-back" size={24} color={C.ink} />
         </Pressable>
         <Text style={styles.headerTitle}>Event erstellen</Text>
         <View style={styles.backButton} />
@@ -1862,6 +2001,7 @@ function EventDetailScreen({
   route,
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "EventDetail">) {
+  const { palette: C, styles } = useTheme();
   const { eventId } = route.params;
   const auth = useContext(AuthContext);
   const [event, setEvent] = useState<EventDetail | null>(null);
@@ -1918,7 +2058,7 @@ function EventDetailScreen({
     <SafeAreaView style={styles.safe}>
       <View style={styles.conversationHeader}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backArrow}>‹</Text>
+          <Ionicons name="chevron-back" size={24} color={C.ink} />
         </Pressable>
         <Text style={styles.headerTitle}>Event</Text>
         <View style={styles.backButton} />
@@ -1949,6 +2089,19 @@ function EventDetailScreen({
               <Text style={styles.cardMeta}>{event.description}</Text>
             </>
           )}
+          <Pressable
+            style={styles.mapLink}
+            onPress={() =>
+              Linking.openURL(
+                `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                  `${event.title}, ${event.city}`,
+                )}`,
+              )
+            }
+          >
+            <Ionicons name="location" size={16} color={C.ink} />
+            <Text style={styles.mapLinkText}>In Karte oeffnen</Text>
+          </Pressable>
           <Text style={styles.label}>Veranstalter</Text>
           <Text style={styles.cardMeta}>{event.creatorName}</Text>
           <Text style={styles.label}>Plaetze</Text>
@@ -1991,24 +2144,96 @@ function EventDetailScreen({
 }
 
 function ProfileScreen() {
+  const { palette: C, styles, scheme, toggleScheme } = useTheme();
   const profile = useContext(ProfileContext);
-  const { logout } = useContext(AuthActionsContext);
+  const auth = useContext(AuthContext);
+  const { logout, updateProfile } = useContext(AuthActionsContext);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList, "Main">>();
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   if (!profile) return null;
+
+  const pickPhoto = async () => {
+    if (uploadingPhoto) return;
+    setPhotoError(null);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setPhotoError("Zugriff auf Fotos wurde nicht erlaubt.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.4,
+      base64: true,
+    });
+    if (result.canceled || !result.assets[0]?.base64) return;
+    const photoUrl = `data:image/jpeg;base64,${result.assets[0].base64}`;
+    if (photoUrl.length > 350_000) {
+      setPhotoError("Foto ist zu gross, bitte ein kleineres Bild waehlen.");
+      return;
+    }
+    setUploadingPhoto(true);
+    try {
+      const updated = await apiRequest<Profile>("/v1/me", auth, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: profile.name,
+          city: profile.city,
+          sport: profile.sport,
+          level: profile.level,
+          photoUrl,
+        }),
+      });
+      updateProfile(updated);
+    } catch {
+      setPhotoError("Foto konnte nicht gespeichert werden.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <Header title="Profil" />
       <View style={styles.profileHead}>
-        <View style={styles.profileAvatar}>
-          <Text style={styles.profileInitial}>
-            {profile.name[0]?.toUpperCase()}
-          </Text>
-        </View>
+        <Pressable onPress={() => void pickPhoto()} disabled={uploadingPhoto}>
+          <View style={styles.profileAvatar}>
+            {profile.photoUrl ? (
+              <Image source={{ uri: profile.photoUrl }} style={styles.profileAvatarImage} />
+            ) : (
+              <Text style={styles.profileInitial}>
+                {profile.name[0]?.toUpperCase()}
+              </Text>
+            )}
+            {uploadingPhoto ? (
+              <View style={styles.profilePhotoBadge}>
+                <ActivityIndicator color={COURT_FIXED} size="small" />
+              </View>
+            ) : (
+              <View style={styles.profilePhotoBadge}>
+                <Ionicons name="camera" size={14} color={COURT_FIXED} />
+              </View>
+            )}
+          </View>
+        </Pressable>
         <Text style={styles.profileName}>{profile.name}</Text>
         <Text style={styles.profileSub}>
           {profile.city} · {profile.sport}
         </Text>
+        {photoError && <Text style={styles.errorText}>{photoError}</Text>}
+      </View>
+      <Text style={styles.label}>Darstellung</Text>
+      <View style={styles.settings}>
+        <Text style={styles.settingsText}>Dunkles Design</Text>
+        <Switch
+          value={scheme === "dark"}
+          onValueChange={toggleScheme}
+          trackColor={{ true: C.volt, false: C.line }}
+          thumbColor={COURT_FIXED}
+        />
       </View>
       <Text style={styles.label}>Konto</Text>
       {[
@@ -2023,16 +2248,16 @@ function ProfileScreen() {
           onPress={() => Alert.alert("Bald verfuegbar", `${item} folgt in Kuerze.`)}
         >
           <Text style={styles.settingsText}>{item}</Text>
-          <Text style={styles.arrow}>›</Text>
+          <Ionicons name="chevron-forward" size={18} color={C.mist} />
         </Pressable>
       ))}
       <Pressable style={styles.settings} onPress={() => navigation.navigate("Privacy")}>
         <Text style={styles.settingsText}>Daten & DSGVO</Text>
-        <Text style={styles.arrow}>›</Text>
+        <Ionicons name="chevron-forward" size={18} color={C.mist} />
       </Pressable>
       <Pressable style={styles.settings} onPress={logout}>
         <Text style={[styles.settingsText, { color: C.ember }]}>Abmelden</Text>
-        <Text style={styles.arrow}>›</Text>
+        <Ionicons name="chevron-forward" size={18} color={C.mist} />
       </Pressable>
     </ScrollView>
   );
@@ -2041,6 +2266,7 @@ function ProfileScreen() {
 function PrivacyScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Privacy">) {
+  const { palette: C, styles } = useTheme();
   const auth = useContext(AuthContext);
   const { logout } = useContext(AuthActionsContext);
   const [blockedList, setBlockedList] = useState<BlockedUser[]>([]);
@@ -2113,7 +2339,7 @@ function PrivacyScreen({
     <SafeAreaView style={styles.safe}>
       <View style={styles.conversationHeader}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backArrow}>‹</Text>
+          <Ionicons name="chevron-back" size={24} color={C.ink} />
         </Pressable>
         <Text style={styles.headerTitle}>Daten & DSGVO</Text>
         <View style={styles.backButton} />
@@ -2179,6 +2405,7 @@ function ReportScreen({
   route,
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Report">) {
+  const { palette: C, styles } = useTheme();
   const { userId, name } = route.params;
   const auth = useContext(AuthContext);
   const [reason, setReason] = useState<ReportReason>("spam");
@@ -2222,7 +2449,7 @@ function ReportScreen({
     <SafeAreaView style={styles.safe}>
       <View style={styles.conversationHeader}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backArrow}>‹</Text>
+          <Ionicons name="chevron-back" size={24} color={C.ink} />
         </Pressable>
         <Text style={styles.headerTitle}>Melden</Text>
         <View style={styles.backButton} />
@@ -2264,7 +2491,8 @@ function ReportScreen({
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(C: Palette) {
+  return StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.cloud },
   flex: { flex: 1 },
   loading: {
@@ -2298,7 +2526,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 22,
   },
-  brandSymbol: { fontSize: 70, fontWeight: "800", color: C.ink },
+  brandSymbol: { fontSize: 70, fontWeight: "800", color: INK_FIXED },
   brandDot: {
     position: "absolute",
     right: -10,
@@ -2347,7 +2575,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  chipSelected: { backgroundColor: C.ink, borderColor: C.ink },
+  chipSelected: { backgroundColor: INK_FIXED, borderColor: INK_FIXED },
   chipText: { color: C.ink, fontSize: 13, fontWeight: "600" },
   selected: { color: C.volt, fontSize: 13, fontWeight: "700" },
   levels: { flexDirection: "row", gap: 8 },
@@ -2361,8 +2589,9 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
   levelSelected: { backgroundColor: C.volt, borderColor: C.volt },
+  levelSelectedText: { color: INK_FIXED, fontSize: 13, fontWeight: "700" },
   primary: {
-    backgroundColor: C.ink,
+    backgroundColor: INK_FIXED,
     borderRadius: 16,
     alignItems: "center",
     paddingVertical: 16,
@@ -2406,7 +2635,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxBoxChecked: { backgroundColor: C.ink, borderColor: C.ink },
+  checkboxBoxChecked: { backgroundColor: INK_FIXED, borderColor: INK_FIXED },
   checkboxMark: { color: C.volt, fontSize: 13, fontWeight: "800" },
   checkboxLabel: { color: C.ink, fontSize: 13, flex: 1, lineHeight: 18 },
   dangerButton: { backgroundColor: C.ember },
@@ -2454,6 +2683,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  photoImage: { width: "100%", height: "100%" },
   photoEmoji: { fontSize: 90 },
   distance: {
     position: "absolute",
@@ -2537,11 +2767,14 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
-  avatarLetter: { color: C.court, fontSize: 20, fontWeight: "800" },
+  avatarImage: { width: "100%", height: "100%" },
+  avatarLetter: { color: COURT_FIXED, fontSize: 20, fontWeight: "800" },
   chatInfo: { flex: 1 },
   chatName: { color: C.ink, fontSize: 15, fontWeight: "800" },
   chatPreview: { color: C.mist, fontSize: 13, marginTop: 4 },
+  chatMeta: { alignItems: "flex-end", gap: 4 },
   chatTime: { color: C.mist, fontSize: 11 },
   event: {
     backgroundColor: C.court,
@@ -2576,17 +2809,25 @@ const styles = StyleSheet.create({
     marginTop: 15,
   },
   join: {
-    backgroundColor: C.ink,
+    backgroundColor: INK_FIXED,
     borderRadius: 18,
     paddingHorizontal: 17,
     paddingVertical: 9,
   },
   joinText: { color: C.volt, fontSize: 12, fontWeight: "800" },
   joinActive: { backgroundColor: C.volt },
-  joinActiveText: { color: C.ink },
+  joinActiveText: { color: INK_FIXED },
   joinDisabled: { backgroundColor: C.line },
   joinDisabledText: { color: C.mist },
   eventDetailJoin: { alignSelf: "flex-start", marginTop: 16 },
+  mapLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 14,
+    alignSelf: "flex-start",
+  },
+  mapLinkText: { color: C.ink, fontSize: 13, fontWeight: "700", textDecorationLine: "underline" },
   multilineInput: { height: 100, paddingTop: 14, textAlignVertical: "top" },
   fab: {
     position: "absolute",
@@ -2609,8 +2850,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 13,
+    overflow: "hidden",
   },
-  profileInitial: { color: C.ink, fontSize: 38, fontWeight: "800" },
+  profileAvatarImage: { width: "100%", height: "100%" },
+  profilePhotoBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: 11,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: INK_FIXED,
+    borderWidth: 2,
+    borderColor: C.cloud,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  profileInitial: { color: INK_FIXED, fontSize: 38, fontWeight: "800" },
   profileName: { color: C.ink, fontSize: 21, fontWeight: "800" },
   profileSub: { color: C.mist, fontSize: 13, marginTop: 3 },
   verified: {
@@ -2652,7 +2908,7 @@ const styles = StyleSheet.create({
     padding: 28,
   },
   overlayCard: {
-    backgroundColor: C.ink,
+    backgroundColor: INK_FIXED,
     borderRadius: 25,
     padding: 26,
     width: "100%",
@@ -2727,9 +2983,10 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: C.ink,
+    backgroundColor: INK_FIXED,
     alignItems: "center",
     justifyContent: "center",
   },
   sendButtonText: { color: C.volt, fontSize: 18, fontWeight: "800" },
 });
+}

@@ -10,6 +10,7 @@ import { authenticate, AuthenticationError, issueToken } from "./auth.js";
 import { getDatabase } from "./db/client.js";
 import {
   blocks,
+  conversationReads,
   conversations,
   eventMembers,
   events,
@@ -26,11 +27,22 @@ import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from "./passwords.j
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT ?? 10000);
+// A compressed data: URI rather than an external object-storage URL (no bucket
+// is provisioned yet); capped well under the profiles.photo_url column's use as
+// a small inline avatar so a single photo can't bloat a row.
+const photoUrlSchema = z
+  .string()
+  .trim()
+  .max(350_000)
+  .regex(/^data:image\/(png|jpeg|jpg|webp);base64,/)
+  .nullable()
+  .optional();
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(80),
   city: z.string().trim().min(1).max(120),
   sport: z.string().trim().min(1).max(40),
   level: z.string().trim().min(1).max(40),
+  photoUrl: photoUrlSchema,
 });
 const credentialsSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(200),
@@ -46,6 +58,9 @@ const resetConfirmSchema = z.object({
 const paginationQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().trim().min(1).optional(),
+});
+const discoverQuerySchema = paginationQuerySchema.extend({
+  sport: z.string().trim().min(1).max(40).optional(),
 });
 const messagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -400,6 +415,7 @@ app.post("/v1/profiles", async (request, reply) => {
       city: body.city,
       sport: body.sport,
       level: body.level,
+      photoUrl: body.photoUrl ?? null,
     })
     .onConflictDoUpdate({
       target: profiles.userId,
@@ -409,6 +425,7 @@ app.post("/v1/profiles", async (request, reply) => {
         sport: body.sport,
         level: body.level,
         updatedAt: new Date(),
+        ...(body.photoUrl !== undefined ? { photoUrl: body.photoUrl } : {}),
       },
     })
     .returning();
@@ -430,6 +447,7 @@ app.patch("/v1/me", async (request, reply) => {
       sport: body.sport,
       level: body.level,
       updatedAt: new Date(),
+      ...(body.photoUrl !== undefined ? { photoUrl: body.photoUrl } : {}),
     })
     .where(eq(profiles.userId, userId))
     .returning();
@@ -440,7 +458,7 @@ app.patch("/v1/me", async (request, reply) => {
 
 app.get("/v1/discover", async (request, reply) => {
   const identity = await authenticate(request.headers);
-  const query = paginationQuerySchema.parse(request.query);
+  const query = discoverQuerySchema.parse(request.query);
   const database = getDatabase();
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
@@ -469,6 +487,7 @@ app.get("/v1/discover", async (request, reply) => {
       sport: profiles.sport,
       level: profiles.level,
       bio: profiles.bio,
+      photoUrl: profiles.photoUrl,
       createdAt: profiles.createdAt,
     })
     .from(profiles)
@@ -478,6 +497,7 @@ app.get("/v1/discover", async (request, reply) => {
         ne(profiles.userId, userId),
         isNull(users.deletedAt),
         or(eq(profiles.city, callerProfile.city), eq(profiles.sport, callerProfile.sport)),
+        query.sport ? eq(profiles.sport, query.sport) : undefined,
         notInArray(profiles.userId, alreadySwiped),
         // Already-swiped candidates are excluded above; this is a defense-in-depth
         // check in case a match ever exists without both reciprocal swipe rows.
@@ -527,6 +547,7 @@ app.get("/v1/discover", async (request, reply) => {
       sport: row.sport,
       level: row.level,
       bio: row.bio,
+      photoUrl: row.photoUrl,
     })),
     nextCursor,
   });
@@ -736,10 +757,12 @@ app.get("/v1/conversations", async (request, reply) => {
       name: profiles.displayName,
       city: profiles.city,
       sport: profiles.sport,
+      photoUrl: profiles.photoUrl,
       lastMessageBody: lastMessage.body,
       lastMessageSenderUserId: lastMessage.senderUserId,
       lastMessageCreatedAt: lastMessage.createdAt,
       conversationCreatedAt: conversations.createdAt,
+      otherUserLastReadAt: conversationReads.lastReadAt,
     })
     .from(conversations)
     .innerJoin(matches, eq(matches.id, conversations.matchId))
@@ -751,6 +774,13 @@ app.get("/v1/conversations", async (request, reply) => {
       ),
     )
     .leftJoin(lastMessage, eq(lastMessage.conversationId, conversations.id))
+    .leftJoin(
+      conversationReads,
+      and(
+        eq(conversationReads.conversationId, conversations.id),
+        eq(conversationReads.userId, profiles.userId),
+      ),
+    )
     .where(
       and(
         or(eq(matches.userLowId, userId), eq(matches.userHighId, userId)),
@@ -790,6 +820,7 @@ app.get("/v1/conversations", async (request, reply) => {
       name: row.name,
       city: row.city,
       sport: row.sport,
+      photoUrl: row.photoUrl,
       lastMessage: row.lastMessageCreatedAt
         ? {
             body: row.lastMessageBody,
@@ -797,11 +828,40 @@ app.get("/v1/conversations", async (request, reply) => {
             createdAt: row.lastMessageCreatedAt.toISOString(),
           }
         : null,
+      lastMessageReadByOther:
+        row.lastMessageSenderUserId === userId &&
+        row.lastMessageCreatedAt !== null &&
+        row.otherUserLastReadAt !== null &&
+        row.otherUserLastReadAt >= row.lastMessageCreatedAt,
       updatedAt: (row.lastMessageCreatedAt ?? row.conversationCreatedAt).toISOString(),
     })),
     nextCursor,
   });
 });
+
+app.post(
+  "/v1/conversations/:conversationId/read",
+  { config: { rateLimit: { max: 120, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+    const identity = await authenticate(request.headers);
+    const params = conversationParamsSchema.parse(request.params);
+    const database = getDatabase();
+    const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+    const conversation = await findConversationForParticipant(database, params.conversationId, userId);
+    if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+
+    await database
+      .insert(conversationReads)
+      .values({ conversationId: conversation.id, userId, lastReadAt: new Date() })
+      .onConflictDoUpdate({
+        target: [conversationReads.conversationId, conversationReads.userId],
+        set: { lastReadAt: new Date() },
+      });
+
+    return reply.send({ status: "ok" });
+  },
+);
 
 app.get("/v1/conversations/:conversationId/messages", async (request, reply) => {
   const identity = await authenticate(request.headers);
@@ -1283,6 +1343,7 @@ function toProfileResponse(profile: typeof profiles.$inferSelect) {
     city: profile.city,
     sport: profile.sport,
     level: profile.level,
+    photoUrl: profile.photoUrl,
   };
 }
 

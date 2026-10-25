@@ -35,6 +35,9 @@ export const profiles = pgTable(
     level: varchar("level", { length: 40 }).notNull(),
     birthDate: date("birth_date"),
     bio: varchar("bio", { length: 500 }),
+    // Small compressed data: URI (not an external object-storage URL yet); kept
+    // short enough that storing it inline in Postgres is acceptable for now.
+    photoUrl: text("photo_url"),
     latitude: doublePrecision("latitude"),
     longitude: doublePrecision("longitude"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -204,4 +207,20 @@ export const reports = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [index("reports_reported_idx").on(table.reportedUserId)],
+);
+
+export const conversationReads = pgTable(
+  "conversation_reads",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    lastReadAt: timestamp("last_read_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("conversation_reads_conversation_user_unique").on(table.conversationId, table.userId),
+  ],
 );
