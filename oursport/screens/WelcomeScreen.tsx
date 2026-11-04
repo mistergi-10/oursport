@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Pressable,
   SafeAreaView,
   ScrollView,
   Text,
@@ -108,6 +109,11 @@ function OnboardingCarousel({
     setSlideIndex(index);
   };
 
+  const goToSlide = (index: number) => {
+    scrollRef.current?.scrollTo({ x: index * width, animated: true });
+    setSlideIndex(index);
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
@@ -134,13 +140,20 @@ function OnboardingCarousel({
                     <Ionicons name={slide.badgeIcon} size={20} color={C.cloud} />
                   </View>
                 </View>
-                <Text style={styles.title}>{slide.headline}</Text>
-                <Text style={styles.tagline}>{slide.body}</Text>
+                <Text style={styles.title} selectable={false}>{slide.headline}</Text>
+                <Text style={styles.tagline} selectable={false}>{slide.body}</Text>
               </MotiView>
-              {isLast && (
+              {isLast ? (
                 <View style={styles.onboardingActions}>
                   <Button label="Konto erstellen" onPress={onCreateAccount} />
                   <Button variant="secondary" label="Ich habe schon ein Konto" onPress={onLogin} />
+                </View>
+              ) : (
+                <View style={styles.onboardingActions}>
+                  <Button label="Weiter" onPress={() => goToSlide(index + 1)} />
+                  <Pressable onPress={() => goToSlide(slides.length - 1)} accessibilityRole="button">
+                    <Text style={styles.dismiss}>Überspringen</Text>
+                  </Pressable>
                 </View>
               )}
             </View>
@@ -149,7 +162,15 @@ function OnboardingCarousel({
       </ScrollView>
       <View style={styles.dotsRow}>
         {slides.map((slide, index) => (
-          <View key={slide.headline} style={[styles.dot, index === slideIndex && styles.dotActive]} />
+          <Pressable
+            key={slide.headline}
+            onPress={() => goToSlide(index)}
+            accessibilityRole="button"
+            accessibilityLabel={`Zu Folie ${index + 1} wechseln`}
+            hitSlop={8}
+          >
+            <View style={[styles.dot, index === slideIndex && styles.dotActive]} />
+          </Pressable>
         ))}
       </View>
     </SafeAreaView>
