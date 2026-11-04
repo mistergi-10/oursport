@@ -52,3 +52,14 @@ export async function authenticate(headers: {
 
   throw new AuthenticationError("Authentication required");
 }
+
+// WebSocket handshakes can't set custom headers, so the token travels as a
+// `?token=` query param instead; this reshapes it into the same headers shape
+// `authenticate` already validates, rather than duplicating its logic.
+export async function authenticateFromToken(token: string | undefined) {
+  if (!token) throw new AuthenticationError("Authentication required");
+  if (uuidPattern.test(token)) {
+    return authenticate({ "x-user-id": token });
+  }
+  return authenticate({ authorization: `Bearer ${token}` });
+}

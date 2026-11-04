@@ -148,6 +148,8 @@ export const events = pgTable(
     description: varchar("description", { length: 1000 }),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     capacity: integer("capacity").notNull(),
+    recurrenceRule: varchar("recurrence_rule", { length: 20 }), // "weekly" | "biweekly" | null
+    seriesId: uuid("series_id"), // groups generated occurrences of the same recurring event; null for one-off events
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -171,6 +173,24 @@ export const eventMembers = pgTable(
   (table) => [
     uniqueIndex("event_members_event_user_unique").on(table.eventId, table.userId),
     index("event_members_user_idx").on(table.userId),
+  ],
+);
+
+export const eventWaitlist = pgTable(
+  "event_waitlist",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("event_waitlist_event_user_unique").on(table.eventId, table.userId),
+    index("event_waitlist_event_position_idx").on(table.eventId, table.joinedAt),
   ],
 );
 
@@ -222,5 +242,21 @@ export const conversationReads = pgTable(
   },
   (table) => [
     uniqueIndex("conversation_reads_conversation_user_unique").on(table.conversationId, table.userId),
+  ],
+);
+
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dhKey: text("p256dh_key").notNull(),
+    authKey: text("auth_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint),
+    index("push_subscriptions_user_idx").on(table.userId),
   ],
 );

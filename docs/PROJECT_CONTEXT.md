@@ -122,8 +122,6 @@ The API build and Expo TypeScript check pass. Without a local PostgreSQL instanc
 
 ## Next product slices
 
-1. Choose and integrate the production identity provider.
-2. Add discover profiles, swipes, and mutual matches.
-3. Add conversations and messages.
-4. Add events and event membership.
-5. Add blocks, reports, rate limits, and privacy/data deletion flows.
+Slices 1-6 (identity provider, discover/swipes/matches, conversations, events, blocks/reports/privacy, design system & UI polish) have shipped. The app now has a token-based theme system (`oursport/theme/`), shared `Button`/`Card`/`EmptyState`/`Skeleton`/`Chip` components, drag-to-swipe matching (`react-native-gesture-handler`/`react-native-reanimated`/`moti`), an animated match overlay, and accessibility labels.
+
+7. Pro revamp (smarter matching/events, real-time chat, web push, maps preview, UI polish pass 2) — see `docs/requirements/07-pro-revamp.md`.

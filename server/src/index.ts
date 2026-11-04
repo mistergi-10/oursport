@@ -1,12 +1,13 @@
-import { createHash, randomInt } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
+import websocketPlugin from "@fastify/websocket";
 import Fastify from "fastify";
 import { and, asc, desc, eq, gt, isNull, lt, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { authenticate, AuthenticationError, issueToken } from "./auth.js";
+import { authenticate, authenticateFromToken, AuthenticationError, issueToken } from "./auth.js";
 import { getDatabase } from "./db/client.js";
 import {
   blocks,
@@ -14,19 +15,83 @@ import {
   conversations,
   eventMembers,
   events,
+  eventWaitlist,
   matches,
   messages,
   passwordResetCodes,
   profiles,
+  pushSubscriptions,
   reports,
   swipes,
   users,
 } from "./db/schema.js";
 import { sendPasswordResetEmail } from "./email.js";
 import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from "./passwords.js";
+import { getVapidPublicKey, sendWebPushToUser } from "./push.js";
 
-const app = Fastify({ logger: true });
+// `GET /v1/ws` carries its auth token as a `?token=` query param (WebSocket
+// handshakes can't set custom headers); pino's default req serializer logs
+// `req.url` verbatim, which would otherwise put bearer tokens/dev user ids in
+// plaintext access logs. Redact that one query value, nothing else.
+function redactTokenFromUrl(url: string) {
+  return url.replace(/([?&]token=)[^&]+/i, "$1[redacted]");
+}
+
+const app = Fastify({
+  logger: {
+    serializers: {
+      req(request) {
+        return {
+          method: request.method,
+          url: redactTokenFromUrl(request.url),
+          hostname: request.hostname,
+          remoteAddress: request.ip,
+        };
+      },
+    },
+  },
+});
 const port = Number(process.env.PORT ?? 10000);
+
+// In-process userId -> connected sockets map (a user can have multiple tabs/devices
+// open); single-instance only, see Pillar 3's "Out of scope" note on pub/sub fan-out.
+const socketsByUserId = new Map<string, Set<import("ws").WebSocket>>();
+
+function registerSocket(userId: string, socket: import("ws").WebSocket) {
+  const existing = socketsByUserId.get(userId);
+  if (existing) {
+    existing.add(socket);
+  } else {
+    socketsByUserId.set(userId, new Set([socket]));
+  }
+}
+
+function unregisterSocket(userId: string, socket: import("ws").WebSocket) {
+  const existing = socketsByUserId.get(userId);
+  if (!existing) return;
+  existing.delete(socket);
+  if (existing.size === 0) socketsByUserId.delete(userId);
+}
+
+// Used by the push-notification call sites (Pillar 4) to skip sending a web push
+// to someone already actively connected via Pillar 3's websocket.
+function hasConnectedSocket(userId: string) {
+  const sockets = socketsByUserId.get(userId);
+  if (!sockets) return false;
+  for (const socket of sockets) {
+    if (socket.readyState === socket.OPEN) return true;
+  }
+  return false;
+}
+
+function sendToUser(userId: string, payload: unknown) {
+  const sockets = socketsByUserId.get(userId);
+  if (!sockets || sockets.size === 0) return;
+  const data = JSON.stringify(payload);
+  for (const socket of sockets) {
+    if (socket.readyState === socket.OPEN) socket.send(data);
+  }
+}
 // A compressed data: URI rather than an external object-storage URL (no bucket
 // is provisioned yet); capped well under the profiles.photo_url column's use as
 // a small inline avatar so a single photo can't bloat a row.
@@ -37,18 +102,32 @@ const photoUrlSchema = z
   .regex(/^data:image\/(png|jpeg|jpg|webp);base64,/)
   .nullable()
   .optional();
-const profileSchema = z.object({
+const profileFieldsSchema = z.object({
   name: z.string().trim().min(1).max(80),
   city: z.string().trim().min(1).max(120),
   sport: z.string().trim().min(1).max(40),
   level: z.string().trim().min(1).max(40),
   photoUrl: photoUrlSchema,
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+});
+// Setting only one of the pair would leave the geo-distance bucket (Pillar 1)
+// silently computing nonsense, so both-or-neither is enforced at the edge.
+function hasBothOrNeitherCoordinate(value: { latitude?: number; longitude?: number }) {
+  return (value.latitude === undefined) === (value.longitude === undefined);
+}
+const profileSchema = profileFieldsSchema.refine(hasBothOrNeitherCoordinate, {
+  message: "latitude and longitude must be provided together",
+  path: ["longitude"],
 });
 const credentialsSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(200),
   password: z.string().min(8).max(200),
 });
-const signupSchema = credentialsSchema.extend(profileSchema.shape);
+const signupSchema = credentialsSchema.extend(profileFieldsSchema.shape).refine(hasBothOrNeitherCoordinate, {
+  message: "latitude and longitude must be provided together",
+  path: ["longitude"],
+});
 const resetRequestSchema = z.object({ email: credentialsSchema.shape.email });
 const resetConfirmSchema = z.object({
   email: credentialsSchema.shape.email,
@@ -72,6 +151,9 @@ const conversationParamsSchema = z.object({
 const messageBodySchema = z.object({
   body: z.string().trim().min(1).max(2000),
 });
+const wsQuerySchema = z.object({
+  token: z.string().trim().min(1),
+});
 const swipeSchema = z.object({
   targetUserId: z.string().uuid(),
   action: z.enum(["like", "pass"]),
@@ -90,10 +172,12 @@ const eventCreateSchema = z.object({
   }),
   description: z.string().trim().max(1000).optional(),
   capacity: z.coerce.number().int().min(2).max(100),
+  recurrence: z.enum(["weekly", "biweekly"]).optional(),
 });
 const eventsQuerySchema = z.object({
   city: z.string().trim().min(1).max(120).optional(),
   sport: z.string().trim().min(1).max(40).optional(),
+  q: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().trim().min(1).optional(),
 });
@@ -114,10 +198,22 @@ const reportSchema = z.object({
 const deleteMeSchema = z.object({
   password: z.string().min(1).max(200).optional(),
 });
+const pushSubscribeSchema = z.object({
+  endpoint: z.string().trim().url().max(2000),
+  keys: z.object({
+    p256dh: z.string().trim().min(1).max(500),
+    auth: z.string().trim().min(1).max(500),
+  }),
+});
+const pushUnsubscribeSchema = z.object({
+  endpoint: z.string().trim().min(1).max(2000),
+});
 
 app.register(cors, {
   origin: process.env.CORS_ORIGIN?.split(",") ?? true,
 });
+
+app.register(websocketPlugin);
 
 // Tolerates a body-less request sent with "content-type: application/json" (e.g.
 // join/leave event, unblock) instead of the default 400, since those routes never
@@ -183,6 +279,26 @@ function decodeCursor(cursor: string): { sortAt: Date; id: string } | null {
   }
 }
 
+// Discover's keyset cursor additionally encodes the relevance score, since
+// pagination there sorts by (score, createdAt, userId) instead of just (createdAt, userId).
+function encodeScoreCursor(score: number, sortAt: Date, id: string) {
+  return Buffer.from(`${score}|${sortAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeScoreCursor(cursor: string): { score: number; sortAt: Date; id: string } | null {
+  try {
+    const [scoreRaw, sortAtRaw, id] = Buffer.from(cursor, "base64url").toString("utf8").split("|");
+    if (!scoreRaw || !sortAtRaw || !id) return null;
+    const score = Number(scoreRaw);
+    if (!Number.isFinite(score)) return null;
+    const sortAt = new Date(sortAtRaw);
+    if (Number.isNaN(sortAt.getTime())) return null;
+    return { score, sortAt, id };
+  } catch {
+    return null;
+  }
+}
+
 app.get("/", async () => ({
   service: "oursport-api",
   status: "ok",
@@ -236,6 +352,8 @@ app.post(
       city: body.city,
       sport: body.sport,
       level: body.level,
+      latitude: body.latitude ?? null,
+      longitude: body.longitude ?? null,
     })
     .returning();
 
@@ -448,6 +566,7 @@ app.patch("/v1/me", async (request, reply) => {
       level: body.level,
       updatedAt: new Date(),
       ...(body.photoUrl !== undefined ? { photoUrl: body.photoUrl } : {}),
+      ...(body.latitude !== undefined ? { latitude: body.latitude, longitude: body.longitude } : {}),
     })
     .where(eq(profiles.userId, userId))
     .returning();
@@ -463,14 +582,14 @@ app.get("/v1/discover", async (request, reply) => {
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   const [callerProfile] = await database
-    .select({ city: profiles.city, sport: profiles.sport })
+    .select({ city: profiles.city, sport: profiles.sport, latitude: profiles.latitude, longitude: profiles.longitude })
     .from(profiles)
     .where(eq(profiles.userId, userId));
   if (!callerProfile) return reply.code(404).send({ error: "Profile not found" });
 
-  let cursor: { sortAt: Date; id: string } | null = null;
+  let cursor: { score: number; sortAt: Date; id: string } | null = null;
   if (query.cursor) {
-    cursor = decodeCursor(query.cursor);
+    cursor = decodeScoreCursor(query.cursor);
     if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
   }
 
@@ -479,7 +598,34 @@ app.get("/v1/discover", async (request, reply) => {
     .from(swipes)
     .where(eq(swipes.actorUserId, userId));
 
-  const rows = await database
+  // Haversine distance in km, bucketed 3 (<10km) down to 0 (>=200km or unknown);
+  // only computed when the caller has coordinates, otherwise everyone gets 0.
+  const distanceKmSql = sql`(2 * 6371 * asin(sqrt(
+    power(sin(radians((${profiles.latitude} - ${callerProfile.latitude}) / 2)), 2) +
+    cos(radians(${callerProfile.latitude})) * cos(radians(${profiles.latitude})) *
+    power(sin(radians((${profiles.longitude} - ${callerProfile.longitude}) / 2)), 2)
+  )))`;
+  const geoBucketSql =
+    callerProfile.latitude !== null && callerProfile.longitude !== null
+      ? sql<number>`case
+          when ${profiles.latitude} is null or ${profiles.longitude} is null then 0
+          when ${distanceKmSql} < 10 then 3
+          when ${distanceKmSql} < 50 then 2
+          when ${distanceKmSql} < 200 then 1
+          else 0
+        end`
+      : sql<number>`0`;
+  // Deterministic relevance score: exact sport match (weight 1000) outweighs
+  // exact city match (weight 100), which outweighs the geo-distance bucket
+  // (weight 10, so its 0-3 range never crosses into the city-match weight);
+  // createdAt is the separate final tiebreaker applied below, not part of this value.
+  const scoreSql = sql<number>`(
+    (case when ${profiles.sport} = ${callerProfile.sport} then 1000 else 0 end) +
+    (case when ${profiles.city} = ${callerProfile.city} then 100 else 0 end) +
+    (${geoBucketSql}) * 10
+  )`;
+
+  const candidatePool = database
     .select({
       userId: profiles.userId,
       name: profiles.displayName,
@@ -489,6 +635,7 @@ app.get("/v1/discover", async (request, reply) => {
       bio: profiles.bio,
       photoUrl: profiles.photoUrl,
       createdAt: profiles.createdAt,
+      score: scoreSql.as("score"),
     })
     .from(profiles)
     .innerJoin(users, eq(users.id, profiles.userId))
@@ -523,21 +670,36 @@ app.get("/v1/discover", async (request, reply) => {
               ),
             ),
         ),
-        cursor
-          ? or(
-              lt(profiles.createdAt, cursor.sortAt),
-              and(eq(profiles.createdAt, cursor.sortAt), lt(profiles.userId, cursor.id)),
-            )
-          : undefined,
       ),
     )
-    .orderBy(desc(profiles.createdAt), desc(profiles.userId))
+    .as("candidate_pool");
+
+  // Wrapped in an outer select so the cursor/order can reference the computed
+  // `score` column by name (Postgres can't reference a SELECT-list alias from
+  // the same query's WHERE clause).
+  const rows = await database
+    .select()
+    .from(candidatePool)
+    .where(
+      cursor
+        ? or(
+            lt(candidatePool.score, cursor.score),
+            and(eq(candidatePool.score, cursor.score), lt(candidatePool.createdAt, cursor.sortAt)),
+            and(
+              eq(candidatePool.score, cursor.score),
+              eq(candidatePool.createdAt, cursor.sortAt),
+              lt(candidatePool.userId, cursor.id),
+            ),
+          )
+        : undefined,
+    )
+    .orderBy(desc(candidatePool.score), desc(candidatePool.createdAt), desc(candidatePool.userId))
     .limit(query.limit + 1);
 
   const hasMore = rows.length > query.limit;
   const page = hasMore ? rows.slice(0, query.limit) : rows;
   const last = page[page.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor(last.createdAt, last.userId) : null;
+  const nextCursor = hasMore && last ? encodeScoreCursor(last.score, last.createdAt, last.userId) : null;
 
   return reply.send({
     candidates: page.map((row) => ({
@@ -630,14 +792,32 @@ app.post(
       .from(matches)
       .where(and(eq(matches.userLowId, userLowId), eq(matches.userHighId, userHighId)));
 
+    let conversationId: string | null = null;
     if (match) {
       await tx.insert(conversations).values({ matchId: match.id }).onConflictDoNothing();
+      // Same re-select-after-upsert pattern as the match row above, so the id is
+      // returned whether this call just created the conversation or it already existed.
+      const [conversation] = await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.matchId, match.id));
+      conversationId = conversation?.id ?? null;
     }
 
-    return { matched: true as const };
+    return { matched: true as const, conversationId };
   });
 
   if (!result.matched) return reply.code(201).send({ matched: false });
+
+  // Fire-and-forget: sendWebPushToUser never throws, so this can't fail or
+  // delay the response that already confirms the match to the caller.
+  void sendWebPushToUser(body.targetUserId, {
+    type: "match",
+    title: "Neues Match",
+    body: "Du hast ein neues Match! Jetzt chatten.",
+    conversationId: result.conversationId,
+  });
+
   return reply.code(201).send({
     matched: true,
     match: {
@@ -646,6 +826,7 @@ app.post(
       city: targetProfile.city,
       sport: targetProfile.sport,
     },
+    conversationId: result.conversationId,
   });
   },
 );
@@ -917,6 +1098,41 @@ app.get("/v1/conversations/:conversationId/messages", async (request, reply) => 
   });
 });
 
+// Receive-only notification channel (Pillar 3): the socket never accepts
+// client-sent chat messages, it only pushes events after the REST write path
+// (below) persists them, so auth/validation stays in one place.
+//
+// Registered via a nested `app.register()` (not a bare `app.get()`) because
+// @fastify/websocket's `{ websocket: true }` shorthand is wired up through an
+// `onRoute` hook that the plugin adds when IT boots. Avvio only guarantees
+// that ordering for routes declared inside a plugin function registered
+// after it - a route added directly on `app` runs synchronously before the
+// websocket plugin's boot step executes, so it would never get hijacked and
+// would fall through to the plain (request, reply) handler instead, which is
+// exactly why every upgrade attempt was failing with "socket.close is not a
+// function" / HTTP 500.
+app.register(async (instance) => {
+  instance.get("/v1/ws", { websocket: true }, async (socket, request) => {
+    const query = wsQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      socket.close(1008, "Invalid token");
+      return;
+    }
+
+    let userId: string;
+    try {
+      const identity = await authenticateFromToken(query.data.token);
+      userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+    } catch {
+      socket.close(1008, "Unauthorized");
+      return;
+    }
+
+    registerSocket(userId, socket);
+    socket.on("close", () => unregisterSocket(userId, socket));
+  });
+});
+
 app.post(
   "/v1/conversations/:conversationId/messages",
   { config: { rateLimit: { max: 60, timeWindow: "1 minute", hook: "preHandler", keyGenerator: userIdKey } } },
@@ -934,6 +1150,32 @@ app.post(
     .insert(messages)
     .values({ conversationId: conversation.id, senderUserId: userId, body: body.body })
     .returning();
+
+  const wsPayload = {
+    type: "message" as const,
+    conversationId: conversation.id,
+    message: {
+      messageId: message.id,
+      senderUserId: message.senderUserId,
+      body: message.body,
+      createdAt: message.createdAt.toISOString(),
+    },
+  };
+  sendToUser(conversation.userLowId, wsPayload);
+  sendToUser(conversation.userHighId, wsPayload);
+
+  // Best-effort push, skipped if the recipient already has the app open via
+  // Pillar 3's websocket (avoids double-notifying someone with chat open).
+  const recipientUserId = conversation.userLowId === userId ? conversation.userHighId : conversation.userLowId;
+  if (!hasConnectedSocket(recipientUserId)) {
+    const preview = message.body.length > 80 ? `${message.body.slice(0, 80)}…` : message.body;
+    void sendWebPushToUser(recipientUserId, {
+      type: "message",
+      title: "Neue Nachricht",
+      body: preview,
+      conversationId: conversation.id,
+    });
+  }
 
   return reply.code(201).send({
     messageId: message.id,
@@ -962,6 +1204,8 @@ app.post(
   const description = body.description && body.description.length > 0 ? body.description : null;
 
   const { core, memberRows } = await database.transaction(async (tx) => {
+    const seriesId = body.recurrence ? randomUUID() : null;
+
     const [event] = await tx
       .insert(events)
       .values({
@@ -972,6 +1216,8 @@ app.post(
         description,
         startsAt: new Date(body.startsAt),
         capacity: body.capacity,
+        recurrenceRule: body.recurrence ?? null,
+        seriesId,
       })
       .returning();
 
@@ -980,13 +1226,36 @@ app.post(
       .values({ eventId: event.id, userId })
       .returning({ joinedAt: eventMembers.joinedAt });
 
+    // Fixed 8-occurrence batch (see Decisions): the creator is auto-joined to
+    // every generated occurrence too, each an independent, independently
+    // joinable/leavable event row sharing only the new seriesId.
+    if (body.recurrence) {
+      const intervalDays = body.recurrence === "weekly" ? 7 : 14;
+      const baseStartsAt = new Date(body.startsAt).getTime();
+      const occurrenceValues = Array.from({ length: 8 }, (_, index) => ({
+        creatorUserId: userId,
+        title: body.title,
+        sport: body.sport,
+        city: body.city,
+        description,
+        startsAt: new Date(baseStartsAt + (index + 1) * intervalDays * 24 * 60 * 60 * 1000),
+        capacity: body.capacity,
+        recurrenceRule: body.recurrence,
+        seriesId,
+      }));
+      const occurrences = await tx.insert(events).values(occurrenceValues).returning({ id: events.id });
+      await tx
+        .insert(eventMembers)
+        .values(occurrences.map((occurrence) => ({ eventId: occurrence.id, userId })));
+    }
+
     return {
       core: { ...event, creatorName: creatorProfile.displayName },
       memberRows: [{ userId, name: creatorProfile.displayName, joinedAt: member.joinedAt }],
     };
   });
 
-  return reply.code(201).send(summarizeEvent(core, memberRows, userId));
+  return reply.code(201).send(summarizeEvent(core, memberRows, [], userId));
   },
 );
 
@@ -1002,61 +1271,42 @@ app.get("/v1/events", async (request, reply) => {
     if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
   }
 
-  const rows = await database
-    .select({
-      eventId: events.id,
-      title: events.title,
-      sport: events.sport,
-      city: events.city,
-      description: events.description,
-      startsAt: events.startsAt,
-      capacity: events.capacity,
-      creatorUserId: events.creatorUserId,
-      creatorName: profiles.displayName,
-      attendeeCount: sql<number>`(select count(*)::int from ${eventMembers} where ${eventMembers.eventId} = ${events.id})`,
-      isAttending: sql<boolean>`exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId})`,
-    })
-    .from(events)
-    .innerJoin(profiles, eq(profiles.userId, events.creatorUserId))
-    .where(
-      and(
-        gt(events.startsAt, new Date()),
-        query.city ? eq(sql`lower(${events.city})`, query.city.toLowerCase()) : undefined,
-        query.sport ? eq(sql`lower(${events.sport})`, query.sport.toLowerCase()) : undefined,
-        cursor
-          ? or(
-              gt(events.startsAt, cursor.sortAt),
-              and(eq(events.startsAt, cursor.sortAt), gt(events.id, cursor.id)),
-            )
-          : undefined,
-      ),
-    )
-    .orderBy(asc(events.startsAt), asc(events.id))
-    .limit(query.limit + 1);
-
-  const hasMore = rows.length > query.limit;
-  const page = hasMore ? rows.slice(0, query.limit) : rows;
-  const last = page[page.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor(last.startsAt, last.eventId) : null;
-
-  return reply.send({
-    events: page.map((row) => ({
-      eventId: row.eventId,
-      title: row.title,
-      sport: row.sport,
-      city: row.city,
-      startsAt: row.startsAt.toISOString(),
-      description: row.description,
-      capacity: row.capacity,
-      attendeeCount: row.attendeeCount,
-      spotsLeft: row.capacity - row.attendeeCount,
-      isAttending: row.isAttending,
-      isCreator: row.creatorUserId === userId,
-      creatorUserId: row.creatorUserId,
-      creatorName: row.creatorName,
-    })),
-    nextCursor,
+  const result = await fetchEventsPage(database, userId, {
+    city: query.city,
+    sport: query.sport,
+    q: query.q,
+    cursor,
+    limit: query.limit,
   });
+
+  return reply.send(result);
+});
+
+app.get("/v1/events/for-you", async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const query = paginationQuerySchema.parse(request.query);
+  const database = getDatabase();
+  const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  const [callerProfile] = await database
+    .select({ city: profiles.city, sport: profiles.sport })
+    .from(profiles)
+    .where(eq(profiles.userId, userId));
+  if (!callerProfile) return reply.code(404).send({ error: "Profile not found" });
+
+  let cursor: { sortAt: Date; id: string } | null = null;
+  if (query.cursor) {
+    cursor = decodeCursor(query.cursor);
+    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+  }
+
+  const result = await fetchEventsPage(database, userId, {
+    forYou: callerProfile,
+    cursor,
+    limit: query.limit,
+  });
+
+  return reply.send(result);
 });
 
 app.get("/v1/events/:eventId", async (request, reply) => {
@@ -1069,9 +1319,10 @@ app.get("/v1/events/:eventId", async (request, reply) => {
   if (!core) return reply.code(404).send({ error: "Event not found" });
 
   const memberRows = await loadEventMembers(database, params.eventId);
+  const waitlistRows = await loadEventWaitlist(database, params.eventId);
 
   return reply.send({
-    ...summarizeEvent(core, memberRows, userId),
+    ...summarizeEvent(core, memberRows, waitlistRows, userId),
     attendees: memberRows.map((row) => ({ userId: row.userId, name: row.name })),
   });
 });
@@ -1105,14 +1356,15 @@ app.post(
     }
 
     const finalMemberRows = alreadyMember ? memberRows : await loadEventMembers(tx, params.eventId);
-    return { status: "ok" as const, core, memberRows: finalMemberRows };
+    const waitlistRows = await loadEventWaitlist(tx, params.eventId);
+    return { status: "ok" as const, core, memberRows: finalMemberRows, waitlistRows };
   });
 
   if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
   if (result.status === "past") return reply.code(400).send({ error: "Event has already started" });
   if (result.status === "full") return reply.code(409).send({ error: "Event is full" });
 
-  return reply.send(summarizeEvent(result.core, result.memberRows, userId));
+  return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
   },
 );
 
@@ -1126,6 +1378,10 @@ app.post(
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   const result = await database.transaction(async (tx) => {
+    // Serializes against concurrent joins/waitlist-joins/leaves for this event so
+    // the auto-promotion below can't race with another capacity-affecting mutation.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${params.eventId}))`);
+
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
     if (core.creatorUserId === userId) return { status: "creator" as const };
@@ -1133,14 +1389,40 @@ app.post(
     const memberRows = await loadEventMembers(tx, params.eventId);
     const membership = memberRows.find((row) => row.userId === userId);
 
+    let promotedUserId: string | null = null;
     if (membership) {
       await tx
         .delete(eventMembers)
         .where(and(eq(eventMembers.eventId, params.eventId), eq(eventMembers.userId, userId)));
+
+      // Auto-promote the earliest-joined waitlisted user into the vacated spot.
+      const [earliestWaitlisted] = await loadEventWaitlist(tx, params.eventId);
+      if (earliestWaitlisted) {
+        await tx
+          .delete(eventWaitlist)
+          .where(
+            and(
+              eq(eventWaitlist.eventId, params.eventId),
+              eq(eventWaitlist.userId, earliestWaitlisted.userId),
+            ),
+          );
+        await tx
+          .insert(eventMembers)
+          .values({ eventId: params.eventId, userId: earliestWaitlisted.userId })
+          .onConflictDoNothing();
+        promotedUserId = earliestWaitlisted.userId;
+      }
     }
 
     const finalMemberRows = membership ? await loadEventMembers(tx, params.eventId) : memberRows;
-    return { status: "ok" as const, core, memberRows: finalMemberRows };
+    const finalWaitlistRows = await loadEventWaitlist(tx, params.eventId);
+    return {
+      status: "ok" as const,
+      core,
+      memberRows: finalMemberRows,
+      waitlistRows: finalWaitlistRows,
+      promotedUserId,
+    };
   });
 
   if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
@@ -1148,7 +1430,88 @@ app.post(
     return reply.code(400).send({ error: "Creator cannot leave their own event" });
   }
 
-  return reply.send(summarizeEvent(result.core, result.memberRows, userId));
+  // Best-effort push, sent after the transaction above already committed.
+  if (result.promotedUserId) {
+    void sendWebPushToUser(result.promotedUserId, {
+      type: "waitlist_promoted",
+      title: "Platz frei geworden",
+      body: `Du bist jetzt dabei: ${result.core.title}`,
+      eventId: result.core.id,
+    });
+  }
+
+  return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
+  },
+);
+
+app.post(
+  "/v1/events/:eventId/waitlist",
+  { config: { rateLimit: { max: 30, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const params = eventParamsSchema.parse(request.params);
+  const database = getDatabase();
+  const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  const result = await database.transaction(async (tx) => {
+    // Same advisory lock as join, so the "already attending" check below can't
+    // race with a concurrent join for this event.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${params.eventId}))`);
+
+    const core = await loadEventCore(tx, params.eventId);
+    if (!core) return { status: "not_found" as const };
+    if (core.creatorUserId === userId) return { status: "creator" as const };
+
+    const memberRows = await loadEventMembers(tx, params.eventId);
+    if (memberRows.some((row) => row.userId === userId)) return { status: "attending" as const };
+
+    // Idempotent no-op if the caller is already on the waitlist.
+    await tx.insert(eventWaitlist).values({ eventId: params.eventId, userId }).onConflictDoNothing();
+
+    const waitlistRows = await loadEventWaitlist(tx, params.eventId);
+    return { status: "ok" as const, core, memberRows, waitlistRows };
+  });
+
+  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
+  if (result.status === "creator") return reply.code(400).send({ error: "Creator is already attending" });
+  if (result.status === "attending") return reply.code(400).send({ error: "Already attending this event" });
+
+  const waitlistPosition = result.waitlistRows.findIndex((row) => row.userId === userId) + 1;
+  return reply.send({
+    ...summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId),
+    waitlistPosition,
+  });
+  },
+);
+
+app.post(
+  "/v1/events/:eventId/waitlist/leave",
+  { config: { rateLimit: { max: 30, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const params = eventParamsSchema.parse(request.params);
+  const database = getDatabase();
+  const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  const result = await database.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${params.eventId}))`);
+
+    const core = await loadEventCore(tx, params.eventId);
+    if (!core) return { status: "not_found" as const };
+
+    // Idempotent: removing a waitlist row the caller never had is not an error.
+    await tx
+      .delete(eventWaitlist)
+      .where(and(eq(eventWaitlist.eventId, params.eventId), eq(eventWaitlist.userId, userId)));
+
+    const memberRows = await loadEventMembers(tx, params.eventId);
+    const waitlistRows = await loadEventWaitlist(tx, params.eventId);
+    return { status: "ok" as const, core, memberRows, waitlistRows };
+  });
+
+  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
+
+  return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
   },
 );
 
@@ -1300,6 +1663,59 @@ app.delete(
   },
 );
 
+// Public (no auth): the VAPID public key is not user-specific, same value for
+// every client. Returns null rather than throwing when unset (dev/CI/Render
+// without the env var configured yet) so callers can degrade gracefully.
+app.get("/v1/push/public-key", async (_request, reply) => {
+  return reply.send({ publicKey: getVapidPublicKey() });
+});
+
+app.post(
+  "/v1/push/subscribe",
+  { config: { rateLimit: { max: 20, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+    const identity = await authenticate(request.headers);
+    const body = pushSubscribeSchema.parse(request.body);
+    const database = getDatabase();
+    const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+    // Re-associates the endpoint with the current caller on conflict (e.g. a
+    // shared browser where a different account subsequently subscribes).
+    await database
+      .insert(pushSubscriptions)
+      .values({
+        userId,
+        endpoint: body.endpoint,
+        p256dhKey: body.keys.p256dh,
+        authKey: body.keys.auth,
+      })
+      .onConflictDoUpdate({
+        target: pushSubscriptions.endpoint,
+        set: { userId, p256dhKey: body.keys.p256dh, authKey: body.keys.auth },
+      });
+
+    return reply.code(201).send({ subscribed: true });
+  },
+);
+
+app.post(
+  "/v1/push/unsubscribe",
+  { config: { rateLimit: { max: 20, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+    const identity = await authenticate(request.headers);
+    const body = pushUnsubscribeSchema.parse(request.body);
+    const database = getDatabase();
+    const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+    // Idempotent: removing a subscription the caller never had is not an error.
+    await database
+      .delete(pushSubscriptions)
+      .where(and(eq(pushSubscriptions.userId, userId), eq(pushSubscriptions.endpoint, body.endpoint)));
+
+    return reply.send({ unsubscribed: true });
+  },
+);
+
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof AuthenticationError) {
     return reply.code(error.statusCode).send({ error: error.message });
@@ -1419,6 +1835,7 @@ async function loadEventCore(database: DatabaseOrTx, eventId: string) {
       capacity: events.capacity,
       creatorUserId: events.creatorUserId,
       creatorName: profiles.displayName,
+      seriesId: events.seriesId,
     })
     .from(events)
     .innerJoin(profiles, eq(profiles.userId, events.creatorUserId))
@@ -1437,10 +1854,26 @@ async function loadEventMembers(database: DatabaseOrTx, eventId: string) {
     .orderBy(asc(eventMembers.joinedAt));
 }
 
+// Ordered by joinedAt ASC so index 0 is always the next promotion candidate
+// (FIFO); also doubles as the waitlist count (array length) everywhere.
+async function loadEventWaitlist(database: DatabaseOrTx, eventId: string) {
+  return database
+    .select({ userId: eventWaitlist.userId, joinedAt: eventWaitlist.joinedAt })
+    .from(eventWaitlist)
+    .where(eq(eventWaitlist.eventId, eventId))
+    .orderBy(asc(eventWaitlist.joinedAt));
+}
+
 type EventCore = NonNullable<Awaited<ReturnType<typeof loadEventCore>>>;
 type EventMemberRow = Awaited<ReturnType<typeof loadEventMembers>>[number];
+type EventWaitlistRow = Awaited<ReturnType<typeof loadEventWaitlist>>[number];
 
-function summarizeEvent(core: EventCore, memberRows: EventMemberRow[], userId: string) {
+function summarizeEvent(
+  core: EventCore,
+  memberRows: EventMemberRow[],
+  waitlistRows: EventWaitlistRow[],
+  userId: string,
+) {
   const attendeeCount = memberRows.length;
   return {
     eventId: core.id,
@@ -1456,6 +1889,92 @@ function summarizeEvent(core: EventCore, memberRows: EventMemberRow[], userId: s
     isCreator: core.creatorUserId === userId,
     creatorUserId: core.creatorUserId,
     creatorName: core.creatorName,
+    waitlistCount: waitlistRows.length,
+    isWaitlisted: waitlistRows.some((row) => row.userId === userId),
+    seriesId: core.seriesId,
+  };
+}
+
+// Shared by GET /v1/events and GET /v1/events/for-you: same future-only
+// filter, keyset pagination, and response shape; only the WHERE-clause filters differ.
+async function fetchEventsPage(
+  database: Database,
+  userId: string,
+  options: {
+    city?: string;
+    sport?: string;
+    q?: string;
+    forYou?: { city: string; sport: string };
+    cursor: { sortAt: Date; id: string } | null;
+    limit: number;
+  },
+) {
+  const rows = await database
+    .select({
+      eventId: events.id,
+      title: events.title,
+      sport: events.sport,
+      city: events.city,
+      description: events.description,
+      startsAt: events.startsAt,
+      capacity: events.capacity,
+      creatorUserId: events.creatorUserId,
+      creatorName: profiles.displayName,
+      seriesId: events.seriesId,
+      attendeeCount: sql<number>`(select count(*)::int from ${eventMembers} where ${eventMembers.eventId} = ${events.id})`,
+      isAttending: sql<boolean>`exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId})`,
+      waitlistCount: sql<number>`(select count(*)::int from ${eventWaitlist} where ${eventWaitlist.eventId} = ${events.id})`,
+      isWaitlisted: sql<boolean>`exists (select 1 from ${eventWaitlist} where ${eventWaitlist.eventId} = ${events.id} and ${eventWaitlist.userId} = ${userId})`,
+    })
+    .from(events)
+    .innerJoin(profiles, eq(profiles.userId, events.creatorUserId))
+    .where(
+      and(
+        gt(events.startsAt, new Date()),
+        options.city ? eq(sql`lower(${events.city})`, options.city.toLowerCase()) : undefined,
+        options.sport ? eq(sql`lower(${events.sport})`, options.sport.toLowerCase()) : undefined,
+        options.q
+          ? sql`(${events.title} ilike ${`%${options.q}%`} or ${events.description} ilike ${`%${options.q}%`})`
+          : undefined,
+        options.forYou
+          ? or(eq(events.sport, options.forYou.sport), eq(events.city, options.forYou.city))
+          : undefined,
+        options.cursor
+          ? or(
+              gt(events.startsAt, options.cursor.sortAt),
+              and(eq(events.startsAt, options.cursor.sortAt), gt(events.id, options.cursor.id)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(options.limit + 1);
+
+  const hasMore = rows.length > options.limit;
+  const page = hasMore ? rows.slice(0, options.limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor(last.startsAt, last.eventId) : null;
+
+  return {
+    events: page.map((row) => ({
+      eventId: row.eventId,
+      title: row.title,
+      sport: row.sport,
+      city: row.city,
+      startsAt: row.startsAt.toISOString(),
+      description: row.description,
+      capacity: row.capacity,
+      attendeeCount: row.attendeeCount,
+      spotsLeft: row.capacity - row.attendeeCount,
+      isAttending: row.isAttending,
+      isCreator: row.creatorUserId === userId,
+      creatorUserId: row.creatorUserId,
+      creatorName: row.creatorName,
+      waitlistCount: row.waitlistCount,
+      isWaitlisted: row.isWaitlisted,
+      seriesId: row.seriesId,
+    })),
+    nextCursor,
   };
 }
 

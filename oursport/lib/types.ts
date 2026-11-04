@@ -1,0 +1,62 @@
+export type Profile = {
+  userId: string;
+  name: string;
+  city: string;
+  sport: string;
+  level: string;
+  photoUrl: string | null;
+  latitude: number | null;
+  longitude: number | null;
+};
+export type Candidate = {
+  userId: string;
+  name: string;
+  city: string;
+  sport: string;
+  level: string;
+  bio: string | null;
+  photoUrl: string | null;
+};
+export type LastMessage = { body: string; senderUserId: string; createdAt: string };
+export type ConversationSummary = {
+  conversationId: string;
+  matchId: string;
+  userId: string;
+  name: string;
+  city: string;
+  sport: string;
+  photoUrl: string | null;
+  lastMessage: LastMessage | null;
+  lastMessageReadByOther: boolean;
+  updatedAt: string;
+};
+export type ConversationMessage = {
+  messageId: string;
+  senderUserId: string;
+  body: string;
+  createdAt: string;
+};
+export type MatchInfo = { userId: string; name: string; city: string; sport: string; conversationId: string | null };
+export type BlockedUser = { userId: string; name: string };
+export type ReportReason = "spam" | "harassment" | "fake_profile" | "inappropriate_content" | "other";
+export type EventSummary = {
+  eventId: string;
+  title: string;
+  sport: string;
+  city: string;
+  startsAt: string;
+  description: string | null;
+  capacity: number;
+  attendeeCount: number;
+  spotsLeft: number;
+  isAttending: boolean;
+  isCreator: boolean;
+  creatorUserId: string;
+  creatorName: string;
+  waitlistCount: number;
+  isWaitlisted: boolean;
+  seriesId: string | null;
+};
+export type EventAttendee = { userId: string; name: string };
+export type EventDetail = EventSummary & { attendees: EventAttendee[] };
+export type Auth = { token?: string; userId?: string };

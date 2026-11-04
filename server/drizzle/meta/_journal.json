@@ -57,6 +57,20 @@
       "when": 1792939810767,
       "tag": "0007_swift_tombstone",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793806947597,
+      "tag": "0008_hot_ken_ellis",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793810736031,
+      "tag": "0009_fancy_pet_avengers",
+      "breakpoints": true
     }
   ]
 }
