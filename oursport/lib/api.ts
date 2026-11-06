@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "./constants";
+import i18n from "./i18n";
 import type { Auth } from "./types";
 
 export function createUserId() {
@@ -11,9 +12,21 @@ export function createUserId() {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
+  }
+}
+
+// Thrown by authRequest (signup/login/password-reset), mirroring ApiError's
+// shape so describeApiError can translate either one the same way.
+export class AuthError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.code = code;
   }
 }
 
@@ -31,16 +44,23 @@ export async function apiRequest<T>(path: string, auth: Auth, options?: RequestI
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    const message = (payload as { error?: string } | null)?.error;
-    throw new ApiError(response.status, message ?? `API request failed: ${response.status}`);
+    const errorPayload = payload as { error?: string; code?: string } | null;
+    throw new ApiError(
+      response.status,
+      errorPayload?.error ?? `API request failed: ${response.status}`,
+      errorPayload?.code,
+    );
   }
   return (await response.json()) as T;
 }
 
-// Shared message for the newly rate-limited mutation routes (swipe, send message,
-// create/join/leave event, block, report, delete account).
+// Translates a caught ApiError/AuthError's stable `code` into the active
+// locale's string, falling back to `errors.generic` for an unrecognized code
+// (e.g. one added server-side after this client shipped) or to the caller's
+// own fallback for errors that never carried a code (e.g. a network failure).
 export function describeApiError(caught: unknown, fallback: string) {
-  if (caught instanceof ApiError && caught.status === 429) return "Zu viele Anfragen, bitte kurz warten.";
+  const code = caught instanceof ApiError ? caught.code : caught instanceof AuthError ? caught.code : undefined;
+  if (code) return i18n.t(`errors.${code}`, { defaultValue: i18n.t("errors.generic") });
   return fallback;
 }
 
@@ -52,8 +72,8 @@ export async function authRequest<T>(path: string, body: unknown) {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = (payload as { error?: string } | null)?.error;
-    throw new Error(message ?? "Anfrage fehlgeschlagen");
+    const errorPayload = payload as { error?: string; code?: string } | null;
+    throw new AuthError(errorPayload?.error ?? "Request failed", errorPayload?.code);
   }
   return payload as T;
 }

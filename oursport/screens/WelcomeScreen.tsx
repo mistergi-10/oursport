@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { MotiView } from "moti";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   type NativeScrollEvent,
@@ -15,7 +16,9 @@ import {
 } from "react-native";
 import { BrandMark } from "../components/BrandMark";
 import { Button } from "../components/Button";
+import { Chip } from "../components/Chip";
 import { useReducedMotion } from "../lib/reducedMotion";
+import { localeDisplayNames, setLocale, supportedLocales } from "../lib/i18n";
 import { useTheme } from "../theme";
 import { spacing } from "../theme/tokens";
 
@@ -28,24 +31,43 @@ type Slide = {
   body: string;
 };
 
+// Reused by both the first-launch carousel and the returning-user screen —
+// visible pre-login per the requirements (not gated behind having an account).
+function LanguageSwitcher() {
+  const { styles } = useTheme();
+  const { i18n } = useTranslation();
+  return (
+    <View style={[styles.filterRow, { flexDirection: "row" }]}>
+      {supportedLocales.map((locale) => (
+        <Chip
+          key={locale}
+          label={localeDisplayNames[locale]}
+          selected={i18n.language === locale}
+          onPress={() => void setLocale(locale)}
+        />
+      ))}
+    </View>
+  );
+}
+
 const slides: Slide[] = [
   {
     icon: "heart",
     badgeIcon: "fitness",
-    headline: "Finde Trainingspartner, die zu dir passen",
-    body: "Wische durch Profile aus deiner Naehe und matche mit Leuten, die genauso gern Sport machen wie du.",
+    headline: "welcome.slide1Headline",
+    body: "welcome.slide1Body",
   },
   {
     icon: "calendar",
     badgeIcon: "location",
-    headline: "Entdecke Sport-Events in deiner Naehe",
-    body: "Finde passende Aktivitaeten, tritt bei oder lass dir Wiederholungstermine direkt vorschlagen.",
+    headline: "welcome.slide2Headline",
+    body: "welcome.slide2Body",
   },
   {
     icon: "chatbubble-ellipses",
     badgeIcon: "heart",
-    headline: "Chatte direkt nach dem Match",
-    body: "Sobald es ein Match gibt, plant ihr sofort euer naechstes Training im Chat.",
+    headline: "welcome.slide3Headline",
+    body: "welcome.slide3Body",
   },
 ];
 
@@ -99,6 +121,7 @@ function OnboardingCarousel({
   onLogin: () => void;
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const { width } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
@@ -116,6 +139,7 @@ function OnboardingCarousel({
 
   return (
     <SafeAreaView style={styles.safe}>
+      <LanguageSwitcher />
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -140,19 +164,19 @@ function OnboardingCarousel({
                     <Ionicons name={slide.badgeIcon} size={20} color={C.cloud} />
                   </View>
                 </View>
-                <Text style={styles.title} selectable={false}>{slide.headline}</Text>
-                <Text style={styles.tagline} selectable={false}>{slide.body}</Text>
+                <Text style={styles.title} selectable={false}>{t(slide.headline)}</Text>
+                <Text style={styles.tagline} selectable={false}>{t(slide.body)}</Text>
               </MotiView>
               {isLast ? (
                 <View style={styles.onboardingActions}>
-                  <Button label="Konto erstellen" onPress={onCreateAccount} />
-                  <Button variant="secondary" label="Ich habe schon ein Konto" onPress={onLogin} />
+                  <Button label={t("welcome.createAccount")} onPress={onCreateAccount} />
+                  <Button variant="secondary" label={t("welcome.haveAccount")} onPress={onLogin} />
                 </View>
               ) : (
                 <View style={styles.onboardingActions}>
-                  <Button label="Weiter" onPress={() => goToSlide(index + 1)} />
+                  <Button label={t("welcome.next")} onPress={() => goToSlide(index + 1)} />
                   <Pressable onPress={() => goToSlide(slides.length - 1)} accessibilityRole="button">
-                    <Text style={styles.dismiss}>Überspringen</Text>
+                    <Text style={styles.dismiss}>{t("welcome.skip")}</Text>
                   </Pressable>
                 </View>
               )}
@@ -166,7 +190,7 @@ function OnboardingCarousel({
             key={slide.headline}
             onPress={() => goToSlide(index)}
             accessibilityRole="button"
-            accessibilityLabel={`Zu Folie ${index + 1} wechseln`}
+            accessibilityLabel={t("welcome.goToSlide", { number: index + 1 })}
             hitSlop={8}
           >
             <View style={[styles.dot, index === slideIndex && styles.dotActive]} />
@@ -185,14 +209,16 @@ function ReturningWelcome({
   onLogin: () => void;
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const features: [keyof typeof Ionicons.glyphMap, string][] = [
-    ["heart", "Finde Trainingspartner, die zu deinem Level passen"],
-    ["chatbubble-ellipses", "Chatte direkt und plant euer naechstes Training"],
-    ["calendar", "Entdecke lokale Sport-Events in deiner Naehe"],
+    ["heart", t("welcome.feature1")],
+    ["chatbubble-ellipses", t("welcome.feature2")],
+    ["calendar", t("welcome.feature3")],
   ];
   return (
     <SafeAreaView style={styles.safe}>
+      <LanguageSwitcher />
       <View style={styles.welcome}>
         <MotiView
           from={reducedMotion ? undefined : { opacity: 0, translateY: 16 }}
@@ -202,10 +228,7 @@ function ReturningWelcome({
         >
           <BrandMark />
           <Text style={styles.wordmark}>Our Sport</Text>
-          <Text style={styles.tagline}>
-            Finde Trainingspartner in deiner Naehe. Sport macht zu zweit
-            einfach mehr Spass.
-          </Text>
+          <Text style={styles.tagline}>{t("welcome.tagline")}</Text>
         </MotiView>
         <View style={styles.features}>
           {features.map(([icon, text]) => (
@@ -217,10 +240,10 @@ function ReturningWelcome({
             </View>
           ))}
         </View>
-        <Button label="Konto erstellen" onPress={onCreateAccount} />
+        <Button label={t("welcome.createAccount")} onPress={onCreateAccount} />
         <Button
           variant="secondary"
-          label="Ich habe schon ein Konto"
+          label={t("welcome.haveAccount")}
           onPress={onLogin}
           style={{ marginTop: spacing.md }}
         />

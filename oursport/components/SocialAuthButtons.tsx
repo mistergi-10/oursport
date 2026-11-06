@@ -1,14 +1,16 @@
 import { Alert, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Button } from "./Button";
 import { useTheme } from "../theme";
 
 export function SocialAuthButtons() {
   const { styles } = useTheme();
-  const notify = () => Alert.alert("Bald verfuegbar", "Login mit Google und Apple folgt in Kuerze.");
+  const { t } = useTranslation();
+  const notify = () => Alert.alert(t("socialAuth.comingSoonTitle"), t("socialAuth.comingSoonBody"));
   return (
     <View style={styles.socialRow}>
-      <Button variant="secondary" label="Mit Google fortfahren" onPress={notify} />
-      <Button variant="secondary" label="Mit Apple fortfahren" onPress={notify} />
+      <Button variant="secondary" label={t("socialAuth.google")} onPress={notify} />
+      <Button variant="secondary" label={t("socialAuth.apple")} onPress={notify} />
     </View>
   );
 }

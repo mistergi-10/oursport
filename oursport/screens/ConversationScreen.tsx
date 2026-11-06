@@ -3,6 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MotiView } from "moti";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
@@ -35,6 +36,7 @@ export function ConversationScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Conversation">) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const { conversationId, name, userId: otherUserId } = route.params;
   const auth = useContext(AuthContext);
@@ -256,7 +258,7 @@ export function ConversationScreen({
       if (caught instanceof ApiError && caught.status === 404) {
         markUnavailable();
       } else {
-        setError(describeApiError(caught, caught instanceof Error ? caught.message : "Senden fehlgeschlagen"));
+        setError(describeApiError(caught, t("errors.generic")));
       }
     } finally {
       setSending(false);
@@ -272,25 +274,25 @@ export function ConversationScreen({
       });
       navigation.navigate("Main", { screen: "Chats" });
     } catch (caught) {
-      setError(describeApiError(caught, "Blockieren fehlgeschlagen, bitte erneut versuchen"));
+      setError(describeApiError(caught, t("errors.generic")));
     }
   };
 
   const confirmBlockPartner = () => {
-    Alert.alert(`${name} blockieren?`, "Die Unterhaltung wird danach nicht mehr angezeigt.", [
-      { text: "Abbrechen", style: "cancel" },
-      { text: "Blockieren", style: "destructive", onPress: () => void blockConversationPartner() },
+    Alert.alert(t("conversation.blockConfirmTitle", { name }), t("conversation.blockConfirmBody"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("common.block"), style: "destructive", onPress: () => void blockConversationPartner() },
     ]);
   };
 
   const openMenu = () => {
     Alert.alert(name, undefined, [
       {
-        text: "Melden",
+        text: t("common.report"),
         onPress: () => navigation.navigate("Report", { userId: otherUserId, name }),
       },
-      { text: "Blockieren", style: "destructive", onPress: confirmBlockPartner },
-      { text: "Abbrechen", style: "cancel" },
+      { text: t("common.block"), style: "destructive", onPress: confirmBlockPartner },
+      { text: t("common.cancel"), style: "cancel" },
     ]);
   };
 
@@ -306,7 +308,7 @@ export function ConversationScreen({
             variant="ghost"
             style={styles.backButton}
             onPress={() => navigation.goBack()}
-            accessibilityLabel="Zurueck"
+            accessibilityLabel={t("common.back")}
             icon={<Ionicons name="chevron-back" size={24} color={C.ink} />}
           />
           <Text style={styles.headerTitle}>{name}</Text>
@@ -316,16 +318,16 @@ export function ConversationScreen({
             style={styles.backButton}
             onPress={openMenu}
             disabled={unavailable}
-            accessibilityLabel="Weitere Optionen"
+            accessibilityLabel={t("common.moreOptions")}
             icon={!unavailable ? <Ionicons name="ellipsis-horizontal" size={18} color={C.ink} /> : null}
           />
         </View>
         {unavailable ? (
           <EmptyState
             icon="alert-circle-outline"
-            title="Nicht mehr verfuegbar"
-            body="Diese Unterhaltung ist nicht mehr verfuegbar."
-            actionLabel="Zurueck zu den Chats"
+            title={t("conversation.unavailableTitle")}
+            body={t("conversation.unavailableBody")}
+            actionLabel={t("conversation.backToChats")}
             onAction={() => navigation.navigate("Main", { screen: "Chats" })}
           />
         ) : loading ? (
@@ -335,7 +337,7 @@ export function ConversationScreen({
         ) : (
           <ScrollView contentContainerStyle={styles.messageList}>
             {messagesList.length === 0 ? (
-              <EmptyState title="Sag Hallo 👋" body="Schreib die erste Nachricht." />
+              <EmptyState title={t("conversation.sayHelloTitle")} body={t("conversation.sayHelloBody")} />
             ) : (
               messagesList.map((message) => {
                 const isNew = !animatedMessageIdsRef.current.has(message.messageId);
@@ -373,7 +375,7 @@ export function ConversationScreen({
             <TextInput
               value={draft}
               onChangeText={setDraft}
-              placeholder="Nachricht schreiben..."
+              placeholder={t("conversation.placeholder")}
               placeholderTextColor={C.mist}
               style={styles.composerInput}
               maxLength={2000}
@@ -384,7 +386,7 @@ export function ConversationScreen({
               style={styles.sendButton}
               onPress={send}
               disabled={sending || !draft.trim()}
-              accessibilityLabel="Senden"
+              accessibilityLabel={t("common.send")}
               icon={
                 sending ? (
                   <ActivityIndicator color={C.volt} size="small" />

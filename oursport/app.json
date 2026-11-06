@@ -27,7 +27,8 @@
         {
           "photosPermission": "Our Sport benoetigt Zugriff auf deine Fotos, um ein Profilbild auszuwaehlen."
         }
-      ]
+      ],
+      "expo-localization"
     ]
   }
 }

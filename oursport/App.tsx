@@ -3,9 +3,11 @@ import { NavigationContainer } from "@react-navigation/native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { useTranslation } from "react-i18next";
 import { ThemeProvider, useTheme } from "./theme";
 import { AuthActionsContext, AuthContext, ProfileContext } from "./context/AppContext";
 import { apiRequest, createUserId } from "./lib/api";
+import { initLocale } from "./lib/i18n";
 import type { Auth, Profile } from "./lib/types";
 import { RootStack, navigationRef } from "./navigation/navigators";
 import { WelcomeScreen } from "./screens/WelcomeScreen";
@@ -32,6 +34,7 @@ export default function App() {
 
 function AppInner() {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -42,6 +45,7 @@ function AppInner() {
         AsyncStorage.getItem("oursport-profile"),
         AsyncStorage.getItem("oursport-user-id"),
         AsyncStorage.getItem("oursport-token"),
+        initLocale(),
       ]);
       const nextUserId = storedUserId ?? createUserId();
       if (!storedUserId) await AsyncStorage.setItem("oursport-user-id", nextUserId);
@@ -156,7 +160,7 @@ function AppInner() {
                         routes: [
                           {
                             name: "Login",
-                            params: { successMessage: "Passwort erfolgreich geaendert. Bitte anmelden." },
+                            params: { successMessage: t("resetPassword.successMessage") },
                           },
                         ],
                       })

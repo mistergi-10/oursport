@@ -1,10 +1,11 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { BrandMark } from "../components/BrandMark";
 import { Button } from "../components/Button";
 import { SocialAuthButtons } from "../components/SocialAuthButtons";
 import { useTheme } from "../theme";
-import { authRequest } from "../lib/api";
+import { authRequest, describeApiError } from "../lib/api";
 import type { Profile } from "../lib/types";
 
 export function LoginScreen({
@@ -19,6 +20,7 @@ export function LoginScreen({
   successMessage?: string;
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +34,13 @@ export function LoginScreen({
         "/v1/auth/login",
         { email: email.trim(), password },
       );
-      if (!profile) throw new Error("Kein Profil gefunden");
+      if (!profile) {
+        setError(t("errors.no_profile"));
+        return;
+      }
       await onAuthenticated(token, profile);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Anmeldung fehlgeschlagen");
+      setError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
     }
@@ -46,41 +51,41 @@ export function LoginScreen({
         <View style={styles.hero}>
           <BrandMark />
           <Text style={styles.wordmark}>Our Sport</Text>
-          <Text style={styles.tagline}>Schoen, dich wiederzusehen.</Text>
+          <Text style={styles.tagline}>{t("login.subtitle")}</Text>
         </View>
-        <Text style={styles.title}>Anmelden</Text>
+        <Text style={styles.title}>{t("login.title")}</Text>
         {successMessage && <Text style={styles.helper}>{successMessage}</Text>}
-        <Text style={styles.label}>E-Mail</Text>
+        <Text style={styles.label}>{t("common.emailLabel")}</Text>
         <TextInput
           value={email}
           onChangeText={setEmail}
-          placeholder="du@beispiel.ch"
+          placeholder={t("common.emailPlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           autoCapitalize="none"
           keyboardType="email-address"
         />
-        <Text style={styles.label}>Passwort</Text>
+        <Text style={styles.label}>{t("common.passwordLabel")}</Text>
         <TextInput
           value={password}
           onChangeText={setPassword}
-          placeholder="Dein Passwort"
+          placeholder={t("login.passwordPlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           secureTextEntry
         />
         <Pressable onPress={onForgotPassword}>
-          <Text style={styles.switchLink}>Passwort vergessen?</Text>
+          <Text style={styles.switchLink}>{t("login.forgotPassword")}</Text>
         </Pressable>
         {error && <Text style={styles.errorText}>{error}</Text>}
         <Button
-          label={submitting ? "Wird geprueft..." : "Anmelden"}
+          label={submitting ? t("login.submitting") : t("login.submit")}
           onPress={login}
           disabled={submitting}
         />
         <SocialAuthButtons />
         <Pressable onPress={onSwitchToSignup}>
-          <Text style={styles.switchLink}>Neues Konto erstellen</Text>
+          <Text style={styles.switchLink}>{t("login.switchToSignup")}</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

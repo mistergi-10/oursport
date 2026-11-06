@@ -4,21 +4,33 @@ import { MotiView } from "moti";
 import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { useTranslation } from "react-i18next";
 import { Button } from "../components/Button";
 import { Matching } from "./Matching";
 import { MatchesList } from "./MatchesList";
 import { Events } from "./Events";
 import { ProfileScreen } from "./ProfileScreen";
-import { tabIcons, tabLabels } from "../lib/constants";
+import { tabIcons } from "../lib/constants";
 import { hapticSuccess } from "../lib/haptics";
+import { translateSport } from "../lib/i18n";
 import { useReducedMotion } from "../lib/reducedMotion";
 import type { MatchInfo } from "../lib/types";
 import { useTheme } from "../theme";
 import { MainTab } from "../navigation/navigators";
-import type { RootStackParamList } from "../navigation/types";
+import type { MainTabParamList, RootStackParamList } from "../navigation/types";
+
+// Route name -> translation key, since tab labels (unlike sports/levels) are
+// display-only and carry no wire value that needs to stay stable.
+const tabLabelKeys: Record<keyof MainTabParamList, string> = {
+  Matching: "tabs.matching",
+  Chats: "tabs.chats",
+  Events: "tabs.events",
+  Profile: "tabs.profile",
+};
 
 export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamList, "Main">) {
   const { palette: C, styles, scheme } = useTheme();
+  const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const [activeMatch, setActiveMatch] = useState<MatchInfo | null>(null);
   useEffect(() => {
@@ -37,7 +49,7 @@ export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamLi
             tabBarInactiveTintColor: C.mist,
             tabBarLabel: ({ color }) => (
               <Text style={[styles.tabLabel, { color }]}>
-                {tabLabels[route.name]}
+                {t(tabLabelKeys[route.name])}
               </Text>
             ),
             tabBarIcon: ({ color, focused }) => (
@@ -71,13 +83,12 @@ export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamLi
               >
                 <Ionicons name="heart" size={40} color={C.volt} />
               </MotiView>
-              <Text style={styles.overlayTitle}>Es ist ein Match!</Text>
+              <Text style={styles.overlayTitle}>{t("mainTabs.matchTitle")}</Text>
               <Text style={styles.overlayBody}>
-                Du und {activeMatch.name} wollt beide {activeMatch.sport} gehen.
-                Schaut, wann es bei euch beiden passt.
+                {t("mainTabs.matchBody", { name: activeMatch.name, sport: translateSport(activeMatch.sport) })}
               </Text>
               <Button
-                label="Match ansehen"
+                label={t("mainTabs.viewMatch")}
                 onPress={() => {
                   const match = activeMatch;
                   setActiveMatch(null);
@@ -93,7 +104,7 @@ export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamLi
                 }}
               />
               <Pressable onPress={() => setActiveMatch(null)}>
-                <Text style={styles.dismiss}>Weiter matchen</Text>
+                <Text style={styles.dismiss}>{t("mainTabs.keepSwiping")}</Text>
               </Pressable>
             </MotiView>
           </View>

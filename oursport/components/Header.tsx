@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Button } from "./Button";
 import { useTheme } from "../theme";
 
 export function Header({
   title,
   actionIcon = "options-outline",
-  actionAccessibilityLabel = "Filter",
+  actionAccessibilityLabel,
   onAction,
   accentColor = "ink",
 }: {
@@ -19,6 +20,7 @@ export function Header({
   accentColor?: "ink" | "volt" | "ember" | "mist";
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const accent = C[accentColor];
   return (
     <View style={styles.header}>
@@ -31,7 +33,7 @@ export function Header({
         variant="secondary"
         style={styles.filter}
         onPress={onAction}
-        accessibilityLabel={actionAccessibilityLabel}
+        accessibilityLabel={actionAccessibilityLabel ?? t("header.filter")}
         icon={<Ionicons name={actionIcon} size={18} color={accent} />}
       />
     </View>

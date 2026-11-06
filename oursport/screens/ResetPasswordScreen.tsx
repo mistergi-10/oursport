@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { BrandMark } from "../components/BrandMark";
 import { Button } from "../components/Button";
 import { useTheme } from "../theme";
-import { authRequest } from "../lib/api";
+import { authRequest, describeApiError } from "../lib/api";
 
 export function ResetPasswordScreen({
   email,
@@ -15,6 +16,7 @@ export function ResetPasswordScreen({
   onSuccess: () => void;
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const [emailValue, setEmailValue] = useState(email);
   const [code, setCode] = useState(devCode ?? "");
   const [newPassword, setNewPassword] = useState("");
@@ -23,11 +25,11 @@ export function ResetPasswordScreen({
 
   const confirm = async () => {
     if (!/^\d{6}$/.test(code)) {
-      setError("Bitte den 6-stelligen Code eingeben.");
+      setError(t("resetPassword.codeValidationError"));
       return;
     }
     if (newPassword.length < 8) {
-      setError("Das neue Passwort braucht mind. 8 Zeichen.");
+      setError(t("resetPassword.passwordValidationError"));
       return;
     }
     setError(null);
@@ -40,7 +42,7 @@ export function ResetPasswordScreen({
       });
       onSuccess();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Zuruecksetzen fehlgeschlagen");
+      setError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
     }
@@ -52,41 +54,41 @@ export function ResetPasswordScreen({
         <View style={styles.hero}>
           <BrandMark />
           <Text style={styles.wordmark}>Our Sport</Text>
-          <Text style={styles.tagline}>Neues Passwort festlegen</Text>
+          <Text style={styles.tagline}>{t("resetPassword.tagline")}</Text>
         </View>
-        <Text style={styles.title}>Code eingeben</Text>
-        <Text style={styles.label}>E-Mail</Text>
+        <Text style={styles.title}>{t("resetPassword.title")}</Text>
+        <Text style={styles.label}>{t("common.emailLabel")}</Text>
         <TextInput
           value={emailValue}
           onChangeText={setEmailValue}
-          placeholder="du@beispiel.ch"
+          placeholder={t("common.emailPlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           autoCapitalize="none"
           keyboardType="email-address"
         />
-        <Text style={styles.label}>Code</Text>
+        <Text style={styles.label}>{t("resetPassword.codeLabel")}</Text>
         <TextInput
           value={code}
           onChangeText={setCode}
-          placeholder="6-stelliger Code"
+          placeholder={t("resetPassword.codePlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           keyboardType="number-pad"
           maxLength={6}
         />
-        <Text style={styles.label}>Neues Passwort</Text>
+        <Text style={styles.label}>{t("resetPassword.newPasswordLabel")}</Text>
         <TextInput
           value={newPassword}
           onChangeText={setNewPassword}
-          placeholder="Mind. 8 Zeichen"
+          placeholder={t("resetPassword.newPasswordPlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           secureTextEntry
         />
         {error && <Text style={styles.errorText}>{error}</Text>}
         <Button
-          label={submitting ? "Wird gespeichert..." : "Passwort speichern"}
+          label={submitting ? t("resetPassword.submitting") : t("resetPassword.submit")}
           onPress={confirm}
           disabled={submitting}
         />
