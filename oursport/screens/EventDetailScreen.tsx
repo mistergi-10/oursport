@@ -100,7 +100,7 @@ export function EventDetailScreen({
     const path = `/v1/events/${eventId}/${eventActionPath(previous)}`;
     setSubmitting(true);
     setActionError(null);
-    setEvent({ ...optimisticEventUpdate(previous), attendees: previous.attendees });
+    setEvent({ ...optimisticEventUpdate(previous), attendees: previous.attendees, conversationId: previous.conversationId });
     try {
       const { waitlistPosition: nextWaitlistPosition, ...updated } = await apiRequest<
         EventDetail & { waitlistPosition?: number }

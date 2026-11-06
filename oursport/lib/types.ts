@@ -57,7 +57,6 @@ export type EventSummary = {
   waitlistCount: number;
   isWaitlisted: boolean;
   seriesId: string | null;
-  conversationId: string;
 };
 export type EventAttendee = {
   userId: string;
@@ -67,7 +66,9 @@ export type EventAttendee = {
   ratingCount: number;
   canRate: boolean;
 };
-export type EventDetail = EventSummary & { attendees: EventAttendee[] };
+// conversationId is only ever present on the single-event detail response,
+// never on GET /v1/events list items — kept off the shared EventSummary base.
+export type EventDetail = EventSummary & { attendees: EventAttendee[]; conversationId: string };
 export type EventPhoto = {
   photoId: string;
   uploaderUserId: string;
