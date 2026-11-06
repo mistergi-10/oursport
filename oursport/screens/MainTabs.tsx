@@ -103,8 +103,8 @@ export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamLi
                 }}
               />
               <Pressable onPress={() => setActiveMatch(null)}>
-                <Text style={styles.dismiss}>Weiter matchen</Text>
-              </Pressable>{t("mainTabs.keepSwiping")}
+                <Text style={styles.dismiss}>{t("mainTabs.keepSwiping")}</Text>
+              </Pressable>
             </MotiView>
           </View>
         )}

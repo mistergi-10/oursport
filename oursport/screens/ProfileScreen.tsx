@@ -9,7 +9,7 @@ import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, V
 import { Chip } from "../components/Chip";
 import { Header } from "../components/Header";
 import { AuthActionsContext, AuthContext, ProfileContext } from "../context/AppContext";
-import { apiRequest } from "../lib/api";
+import { apiRequest, describeApiError } from "../lib/api";
 import { localeDisplayNames, setLocale, supportedLocales, translateSport } from "../lib/i18n";
 import { disablePushNotifications, enablePushNotifications, getExistingPushSubscription, isPushSupported } from "../lib/push";
 import type { Profile } from "../lib/types";
@@ -57,9 +57,7 @@ export function ProfileScreen() {
       }
       setNotificationsEnabled(value);
     } catch (error) {
-      setNotificationsError(
-        error instanceof Error ? error.message : t("profile.notificationsChangeFailed"),
-      );
+      setNotificationsError(describeApiError(error, t("profile.notificationsChangeFailed")));
     } finally {
       setNotificationsBusy(false);
     }
