@@ -12,6 +12,7 @@ import { Events } from "./Events";
 import { ProfileScreen } from "./ProfileScreen";
 import { tabIcons } from "../lib/constants";
 import { hapticSuccess } from "../lib/haptics";
+import { translateSport } from "../lib/i18n";
 import { useReducedMotion } from "../lib/reducedMotion";
 import type { MatchInfo } from "../lib/types";
 import { useTheme } from "../theme";
@@ -84,7 +85,7 @@ export function MainTabs({ navigation }: NativeStackScreenProps<RootStackParamLi
               </MotiView>
               <Text style={styles.overlayTitle}>{t("mainTabs.matchTitle")}</Text>
               <Text style={styles.overlayBody}>
-                {t("mainTabs.matchBody", { name: activeMatch.name, sport: activeMatch.sport })}
+                {t("mainTabs.matchBody", { name: activeMatch.name, sport: translateSport(activeMatch.sport) })}
               </Text>
               <Button
                 label={t("mainTabs.viewMatch")}
