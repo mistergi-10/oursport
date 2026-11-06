@@ -71,6 +71,13 @@
       "when": 1793810736031,
       "tag": "0009_fancy_pet_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793981685682,
+      "tag": "0010_harsh_synch",
+      "breakpoints": true
     }
   ]
 }
