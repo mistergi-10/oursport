@@ -496,6 +496,14 @@ export function createStyles(C: Palette) {
     // theme-dependent one (which would be near-white, and fail AA, in dark mode).
     messageTextOwn: { color: INK_FIXED },
     messageTime: { color: C.mist, fontSize: typography.tiny.fontSize, marginTop: spacing.xs, alignSelf: "flex-end" },
+    messageSenderName: {
+      color: C.mist,
+      fontSize: typography.tiny.fontSize,
+      fontWeight: "700",
+      marginBottom: spacing.xs,
+    },
+    messageSenderNameOwn: { textAlign: "right" },
+    messageSenderNameOther: { textAlign: "left" },
     composer: {
       flexDirection: "row",
       alignItems: "flex-end",
@@ -564,5 +572,42 @@ export function createStyles(C: Palette) {
     },
     dot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: C.line },
     dotActive: { width: 20, backgroundColor: INK_FIXED },
+    photoGalleryRow: { gap: spacing.md, paddingVertical: spacing.sm },
+    photoThumb: {
+      width: 96,
+      height: 96,
+      borderRadius: radius.md,
+      overflow: "hidden",
+      backgroundColor: C.cloud,
+    },
+    photoThumbImage: { width: "100%", height: "100%" },
+    photoUploadThumb: {
+      width: 96,
+      height: 96,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: C.line,
+      borderStyle: "dashed",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: C.court,
+    },
+    photoModalOverlay: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: "rgba(18,24,26,0.92)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    photoModalImage: { width: "100%", height: "70%" },
+    attendeeRow: {
+      paddingVertical: spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: C.line,
+      gap: spacing.sm,
+    },
+    attendeeTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    attendeeRatingBadge: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+    attendeeRatingText: { color: C.mist, fontSize: typography.label.fontSize, fontWeight: "700" },
+    starRow: { flexDirection: "row", gap: spacing.xs },
   });
 }

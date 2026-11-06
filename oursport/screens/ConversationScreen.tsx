@@ -36,7 +36,7 @@ export function ConversationScreen({
 }: NativeStackScreenProps<RootStackParamList, "Conversation">) {
   const { palette: C, styles } = useTheme();
   const reducedMotion = useReducedMotion();
-  const { conversationId, name, userId: otherUserId } = route.params;
+  const { conversationId, name, userId: otherUserId, isGroup } = route.params;
   const auth = useContext(AuthContext);
   const profile = useContext(ProfileContext);
   const [messagesList, setMessagesList] = useState<ConversationMessage[]>([]);
@@ -264,6 +264,7 @@ export function ConversationScreen({
   };
 
   const blockConversationPartner = async () => {
+    if (!otherUserId) return;
     setError(null);
     try {
       await apiRequest("/v1/blocks", auth, {
@@ -284,6 +285,7 @@ export function ConversationScreen({
   };
 
   const openMenu = () => {
+    if (!otherUserId) return;
     Alert.alert(name, undefined, [
       {
         text: "Melden",
@@ -310,15 +312,19 @@ export function ConversationScreen({
             icon={<Ionicons name="chevron-back" size={24} color={C.ink} />}
           />
           <Text style={styles.headerTitle}>{name}</Text>
-          <Button
-            size="icon"
-            variant="ghost"
-            style={styles.backButton}
-            onPress={openMenu}
-            disabled={unavailable}
-            accessibilityLabel="Weitere Optionen"
-            icon={!unavailable ? <Ionicons name="ellipsis-horizontal" size={18} color={C.ink} /> : null}
-          />
+          {isGroup ? (
+            <View style={styles.backButton} />
+          ) : (
+            <Button
+              size="icon"
+              variant="ghost"
+              style={styles.backButton}
+              onPress={openMenu}
+              disabled={unavailable}
+              accessibilityLabel="Weitere Optionen"
+              icon={!unavailable ? <Ionicons name="ellipsis-horizontal" size={18} color={C.ink} /> : null}
+            />
+          )}
         </View>
         {unavailable ? (
           <EmptyState
@@ -339,29 +345,39 @@ export function ConversationScreen({
             ) : (
               messagesList.map((message) => {
                 const isNew = !animatedMessageIdsRef.current.has(message.messageId);
+                const isOwn = message.senderUserId === profile?.userId;
                 return (
-                  <MotiView
-                    key={message.messageId}
-                    from={isNew && !reducedMotion ? { opacity: 0, translateY: 8 } : undefined}
-                    animate={{ opacity: 1, translateY: 0 }}
-                    transition={{ type: "timing", duration: reducedMotion ? 0 : 220 }}
-                    style={[
-                      styles.messageBubble,
-                      message.senderUserId === profile?.userId
-                        ? styles.messageBubbleOwn
-                        : styles.messageBubbleOther,
-                    ]}
-                  >
-                    <Text
+                  <View key={message.messageId}>
+                    {isGroup && (
+                      <Text
+                        style={[
+                          styles.messageSenderName,
+                          isOwn ? styles.messageSenderNameOwn : styles.messageSenderNameOther,
+                        ]}
+                      >
+                        {message.senderName}
+                      </Text>
+                    )}
+                    <MotiView
+                      from={isNew && !reducedMotion ? { opacity: 0, translateY: 8 } : undefined}
+                      animate={{ opacity: 1, translateY: 0 }}
+                      transition={{ type: "timing", duration: reducedMotion ? 0 : 220 }}
                       style={[
-                        styles.messageText,
-                        message.senderUserId === profile?.userId && styles.messageTextOwn,
+                        styles.messageBubble,
+                        isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
                       ]}
                     >
-                      {message.body}
-                    </Text>
-                    <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
-                  </MotiView>
+                      <Text
+                        style={[
+                          styles.messageText,
+                          isOwn && styles.messageTextOwn,
+                        ]}
+                      >
+                        {message.body}
+                      </Text>
+                      <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
+                    </MotiView>
+                  </View>
                 );
               })
             )}

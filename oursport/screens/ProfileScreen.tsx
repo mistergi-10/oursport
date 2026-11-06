@@ -9,7 +9,7 @@ import { Header } from "../components/Header";
 import { AuthActionsContext, AuthContext, ProfileContext } from "../context/AppContext";
 import { apiRequest } from "../lib/api";
 import { disablePushNotifications, enablePushNotifications, getExistingPushSubscription, isPushSupported } from "../lib/push";
-import type { Profile } from "../lib/types";
+import type { Profile, RatingSummary } from "../lib/types";
 import { useTheme } from "../theme";
 import { COURT_FIXED, spacing } from "../theme/tokens";
 import type { RootStackParamList } from "../navigation/types";
@@ -29,6 +29,7 @@ export function ProfileScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [ratingSummary, setRatingSummary] = useState<RatingSummary | null>(null);
 
   useEffect(() => {
     if (!pushSupported) return;
@@ -40,6 +41,18 @@ export function ProfileScreen() {
       active = false;
     };
   }, [pushSupported]);
+
+  useEffect(() => {
+    let active = true;
+    apiRequest<{ summary: RatingSummary }>("/v1/users/me/ratings", auth)
+      .then((response) => {
+        if (active) setRatingSummary(response.summary);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [auth.token, auth.userId]);
 
   const toggleNotifications = async (value: boolean) => {
     if (notificationsBusy) return;
@@ -201,6 +214,17 @@ export function ProfileScreen() {
             thumbColor={COURT_FIXED}
           />
         )}
+      </View>
+      <Text style={styles.label}>Deine Bewertungen</Text>
+      <View style={styles.settings}>
+        <View style={{ flex: 1, marginRight: spacing.md }}>
+          <Text style={styles.settingsText}>
+            {ratingSummary && ratingSummary.ratingCount > 0
+              ? `${ratingSummary.averageRating?.toFixed(1)} ★ (${ratingSummary.ratingCount})`
+              : "Noch keine Bewertungen"}
+          </Text>
+          <Text style={styles.helper}>Bewertungen von Mitspielern nach gemeinsamen Events.</Text>
+        </View>
       </View>
       <Text style={styles.label}>Konto</Text>
       {[

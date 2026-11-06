@@ -33,6 +33,7 @@ export type ConversationSummary = {
 export type ConversationMessage = {
   messageId: string;
   senderUserId: string;
+  senderName: string;
   body: string;
   createdAt: string;
 };
@@ -56,7 +57,34 @@ export type EventSummary = {
   waitlistCount: number;
   isWaitlisted: boolean;
   seriesId: string | null;
+  conversationId: string;
 };
-export type EventAttendee = { userId: string; name: string };
+export type EventAttendee = {
+  userId: string;
+  name: string;
+  leftAt: string | null;
+  averageRating: number | null;
+  ratingCount: number;
+  canRate: boolean;
+};
 export type EventDetail = EventSummary & { attendees: EventAttendee[] };
+export type EventPhoto = {
+  photoId: string;
+  uploaderUserId: string;
+  uploaderName: string;
+  photoData: string;
+  caption: string | null;
+  createdAt: string;
+};
+export type RatingSummary = { averageRating: number | null; ratingCount: number };
+export type ReceivedRating = {
+  ratingId: string;
+  eventId: string;
+  eventTitle: string;
+  raterUserId: string;
+  raterName: string;
+  stars: number;
+  comment: string | null;
+  createdAt: string;
+};
 export type Auth = { token?: string; userId?: string };
