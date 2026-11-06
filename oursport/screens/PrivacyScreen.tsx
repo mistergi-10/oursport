@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useCallback, useContext, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { Button } from "../components/Button";
 import { Checkbox } from "../components/Checkbox";
@@ -16,6 +17,7 @@ export function PrivacyScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Privacy">) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const auth = useContext(AuthContext);
   const { logout } = useContext(AuthActionsContext);
   const [blockedList, setBlockedList] = useState<BlockedUser[]>([]);
@@ -57,7 +59,7 @@ export function PrivacyScreen({
       await apiRequest(`/v1/blocks/${userId}`, auth, { method: "DELETE" });
     } catch (caught) {
       setBlockedList(previous);
-      setUnblockError(describeApiError(caught, "Entblocken fehlgeschlagen, bitte erneut versuchen"));
+      setUnblockError(describeApiError(caught, t("errors.generic")));
     } finally {
       setUnblockingUserId(null);
     }
@@ -75,9 +77,9 @@ export function PrivacyScreen({
       logout();
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
-        setDeleteError("Passwort ist falsch.");
+        setDeleteError(t("errors.invalid_password"));
       } else {
-        setDeleteError(describeApiError(caught, "Konto konnte nicht geloescht werden"));
+        setDeleteError(describeApiError(caught, t("errors.generic")));
       }
     } finally {
       setDeleting(false);
@@ -92,20 +94,20 @@ export function PrivacyScreen({
           variant="ghost"
           style={styles.backButton}
           onPress={() => navigation.goBack()}
-          accessibilityLabel="Zurueck"
+          accessibilityLabel={t("common.back")}
           icon={<Ionicons name="chevron-back" size={24} color={C.ink} />}
         />
-        <Text style={styles.headerTitle}>Daten & DSGVO</Text>
+        <Text style={styles.headerTitle}>{t("privacy.headerTitle")}</Text>
         <View style={styles.backButton} />
       </View>
       <ScrollView contentContainerStyle={styles.screen}>
-        <Text style={styles.label}>Blockierte Nutzer</Text>
+        <Text style={styles.label}>{t("privacy.blockedUsers")}</Text>
         {loadingBlocks ? (
           <ActivityIndicator color={C.ink} />
         ) : blocksError ? (
-          <Text style={styles.errorText}>Blockierte Nutzer konnten nicht geladen werden.</Text>
+          <Text style={styles.errorText}>{t("privacy.blockedLoadError")}</Text>
         ) : blockedList.length === 0 ? (
-          <Text style={styles.helper}>Keine blockierten Nutzer.</Text>
+          <Text style={styles.helper}>{t("privacy.noBlockedUsers")}</Text>
         ) : (
           blockedList.map((item) => (
             <View style={styles.settings} key={item.userId}>
@@ -115,22 +117,19 @@ export function PrivacyScreen({
                 disabled={unblockingUserId === item.userId}
               >
                 <Text style={[styles.settingsText, { color: C.ember }]}>
-                  {unblockingUserId === item.userId ? "..." : "Entblocken"}
+                  {unblockingUserId === item.userId ? t("privacy.unblocking") : t("privacy.unblock")}
                 </Text>
               </Pressable>
             </View>
           ))
         )}
         {unblockError && <Text style={styles.errorText}>{unblockError}</Text>}
-        <Text style={[styles.label, { marginTop: spacing.xxl }]}>Konto loeschen</Text>
-        <Text style={styles.helper}>
-          Diese Aktion ist endgueltig. Dein Profil wird anonymisiert, bestehende Matches,
-          Chats und Events bleiben fuer andere Nutzer sichtbar.
-        </Text>
+        <Text style={[styles.label, { marginTop: spacing.xxl }]}>{t("privacy.deleteAccountTitle")}</Text>
+        <Text style={styles.helper}>{t("privacy.deleteAccountBody")}</Text>
         <TextInput
           value={password}
           onChangeText={setPassword}
-          placeholder="Passwort"
+          placeholder={t("privacy.passwordPlaceholder")}
           placeholderTextColor={C.mist}
           style={[styles.input, { marginTop: spacing.md }]}
           secureTextEntry
@@ -138,12 +137,12 @@ export function PrivacyScreen({
         <Checkbox
           checked={confirmed}
           onPress={() => setConfirmed((value) => !value)}
-          label="Ich verstehe, dass die Loeschung endgueltig ist."
+          label={t("privacy.confirmLabel")}
         />
         {deleteError && <Text style={styles.errorText}>{deleteError}</Text>}
         <Button
           variant="danger"
-          label={deleting ? "Wird geloescht..." : "Konto endgueltig loeschen"}
+          label={deleting ? t("privacy.deleting") : t("privacy.deleteAccount")}
           onPress={() => void deleteAccount()}
           disabled={deleting || !password.trim() || !confirmed}
           style={{ marginTop: spacing.xl }}

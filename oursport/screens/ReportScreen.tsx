@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useContext, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { Button } from "../components/Button";
 import { Checkbox } from "../components/Checkbox";
@@ -16,6 +17,7 @@ export function ReportScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "Report">) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const { userId, name } = route.params;
   const auth = useContext(AuthContext);
   const [reason, setReason] = useState<ReportReason>("spam");
@@ -25,11 +27,11 @@ export function ReportScreen({
   const [submitting, setSubmitting] = useState(false);
 
   const reasons: { value: ReportReason; label: string }[] = [
-    { value: "spam", label: "Spam" },
-    { value: "harassment", label: "Belaestigung" },
-    { value: "fake_profile", label: "Fake-Profil" },
-    { value: "inappropriate_content", label: "Unangemessene Inhalte" },
-    { value: "other", label: "Sonstiges" },
+    { value: "spam", label: t("report.reasons.spam") },
+    { value: "harassment", label: t("report.reasons.harassment") },
+    { value: "fake_profile", label: t("report.reasons.fakeProfile") },
+    { value: "inappropriate_content", label: t("report.reasons.inappropriate") },
+    { value: "other", label: t("report.reasons.other") },
   ];
 
   const submit = async () => {
@@ -49,7 +51,7 @@ export function ReportScreen({
       }
       navigation.goBack();
     } catch (caught) {
-      setError(describeApiError(caught, "Meldung konnte nicht gesendet werden"));
+      setError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
     }
@@ -63,15 +65,15 @@ export function ReportScreen({
           variant="ghost"
           style={styles.backButton}
           onPress={() => navigation.goBack()}
-          accessibilityLabel="Zurueck"
+          accessibilityLabel={t("common.back")}
           icon={<Ionicons name="chevron-back" size={24} color={C.ink} />}
         />
-        <Text style={styles.headerTitle}>Melden</Text>
+        <Text style={styles.headerTitle}>{t("report.headerTitle")}</Text>
         <View style={styles.backButton} />
       </View>
       <ScrollView contentContainerStyle={styles.setup}>
-        <Text style={styles.helper}>{name} melden</Text>
-        <Text style={styles.label}>Grund</Text>
+        <Text style={styles.helper}>{t("report.subjectLabel", { name })}</Text>
+        <Text style={styles.label}>{t("report.reasonLabel")}</Text>
         <View style={styles.chips}>
           {reasons.map((item) => (
             <Chip
@@ -82,11 +84,11 @@ export function ReportScreen({
             />
           ))}
         </View>
-        <Text style={styles.label}>Hinweis (optional)</Text>
+        <Text style={styles.label}>{t("report.noteLabel")}</Text>
         <TextInput
           value={note}
           onChangeText={setNote}
-          placeholder="Weitere Details..."
+          placeholder={t("report.notePlaceholder")}
           placeholderTextColor={C.mist}
           style={[styles.input, styles.multilineInput]}
           maxLength={1000}
@@ -95,11 +97,11 @@ export function ReportScreen({
         <Checkbox
           checked={alsoBlock}
           onPress={() => setAlsoBlock((value) => !value)}
-          label="Nutzer zusaetzlich blockieren"
+          label={t("report.alsoBlock")}
         />
         {error && <Text style={styles.errorText}>{error}</Text>}
         <Button
-          label={submitting ? "Wird gesendet..." : "Melden"}
+          label={submitting ? t("report.submitting") : t("report.submit")}
           onPress={() => void submit()}
           disabled={submitting}
         />

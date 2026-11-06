@@ -3,6 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useCallback, useContext, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { AuthContext } from "../context/AppContext";
@@ -18,6 +19,7 @@ import {
   optimisticEventUpdate,
 } from "../lib/format";
 import type { EventDetail } from "../lib/types";
+import { translateSport } from "../lib/i18n";
 import { useTheme } from "../theme";
 import { spacing } from "../theme/tokens";
 import type { RootStackParamList } from "../navigation/types";
@@ -27,6 +29,7 @@ export function EventDetailScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "EventDetail">) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const { eventId } = route.params;
   const auth = useContext(AuthContext);
   const [event, setEvent] = useState<EventDetail | null>(null);
@@ -71,7 +74,7 @@ export function EventDetailScreen({
       setWaitlistPosition(nextWaitlistPosition);
     } catch (caught) {
       setEvent(previous);
-      setActionError(describeApiError(caught, "Aktion fehlgeschlagen, bitte erneut versuchen"));
+      setActionError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
     }
@@ -85,10 +88,10 @@ export function EventDetailScreen({
           variant="ghost"
           style={styles.backButton}
           onPress={() => navigation.goBack()}
-          accessibilityLabel="Zurueck"
+          accessibilityLabel={t("common.back")}
           icon={<Ionicons name="chevron-back" size={24} color={C.ink} />}
         />
-        <Text style={styles.headerTitle}>Event</Text>
+        <Text style={styles.headerTitle}>{t("eventDetail.headerTitle")}</Text>
         <View style={styles.backButton} />
       </View>
       {loading ? (
@@ -98,9 +101,9 @@ export function EventDetailScreen({
       ) : loadError || !event ? (
         <EmptyState
           icon="alert-circle-outline"
-          title="Event nicht gefunden"
-          body="Das Event konnte nicht geladen werden."
-          actionLabel="Erneut versuchen"
+          title={t("eventDetail.notFoundTitle")}
+          body={t("eventDetail.notFoundBody")}
+          actionLabel={t("common.retry")}
           onAction={() => void load()}
         />
       ) : (
@@ -110,11 +113,11 @@ export function EventDetailScreen({
             {formatEventDay(event.startsAt)}. {formatEventMonth(event.startsAt)} ·{" "}
             {formatEventTime(event.startsAt)} · {event.city}
           </Text>
-          <Text style={styles.label}>Sportart</Text>
-          <Text style={styles.cardMeta}>{event.sport}</Text>
+          <Text style={styles.label}>{t("eventDetail.sportLabel")}</Text>
+          <Text style={styles.cardMeta}>{translateSport(event.sport)}</Text>
           {event.description && (
             <>
-              <Text style={styles.label}>Beschreibung</Text>
+              <Text style={styles.label}>{t("eventDetail.descriptionLabel")}</Text>
               <Text style={styles.cardMeta}>{event.description}</Text>
             </>
           )}
@@ -129,13 +132,13 @@ export function EventDetailScreen({
             }
           >
             <Ionicons name="location" size={16} color={C.ink} />
-            <Text style={styles.mapLinkText}>In Karte oeffnen</Text>
+            <Text style={styles.mapLinkText}>{t("eventDetail.openMap")}</Text>
           </Pressable>
-          <Text style={styles.label}>Veranstalter</Text>
+          <Text style={styles.label}>{t("eventDetail.organizerLabel")}</Text>
           <Text style={styles.cardMeta}>{event.creatorName}</Text>
-          <Text style={styles.label}>Plaetze</Text>
+          <Text style={styles.label}>{t("eventDetail.spotsLabel")}</Text>
           <Text style={styles.cardMeta}>
-            {event.attendeeCount}/{event.capacity} belegt · {event.spotsLeft} frei
+            {t("eventDetail.spotsValue", { attending: event.attendeeCount, capacity: event.capacity, spotsLeft: event.spotsLeft })}
           </Text>
           {actionError && (
             <Text style={styles.errorText}>{actionError}</Text>
@@ -153,7 +156,7 @@ export function EventDetailScreen({
               (event.isAttending || event.isWaitlisted) && styles.joinActive,
             ]}
           />
-          <Text style={[styles.label, { marginTop: spacing.xl }]}>Teilnehmer</Text>
+          <Text style={[styles.label, { marginTop: spacing.xl }]}>{t("eventDetail.attendeesLabel")}</Text>
           {event.attendees.map((attendee) => (
             <View style={styles.settings} key={attendee.userId}>
               <Text style={styles.settingsText}>{attendee.name}</Text>

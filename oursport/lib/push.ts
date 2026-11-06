@@ -1,6 +1,7 @@
 import { Platform } from "react-native";
 
 import { apiRequest } from "./api";
+import i18n from "./i18n";
 import type { Auth } from "./types";
 
 export function isPushSupported() {
@@ -47,17 +48,17 @@ export async function getExistingPushSubscription() {
 
 export async function enablePushNotifications(auth: Auth) {
   if (!isPushSupported()) {
-    throw new Error("Push-Benachrichtigungen werden in diesem Browser nicht unterstuetzt.");
+    throw new Error(i18n.t("errors.push_unsupported"));
   }
 
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
-    throw new Error("Benachrichtigungen wurden nicht erlaubt.");
+    throw new Error(i18n.t("errors.push_permission_denied"));
   }
 
   const { publicKey } = await apiRequest<{ publicKey: string | null }>("/v1/push/public-key", auth);
   if (!publicKey) {
-    throw new Error("Push ist serverseitig noch nicht konfiguriert.");
+    throw new Error(i18n.t("errors.push_not_configured"));
   }
 
   const registration = await getServiceWorkerRegistration();
@@ -71,7 +72,7 @@ export async function enablePushNotifications(auth: Auth) {
 
   const json = subscription.toJSON();
   if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
-    throw new Error("Abonnement konnte nicht erstellt werden.");
+    throw new Error(i18n.t("errors.push_subscription_failed"));
   }
 
   await apiRequest("/v1/push/subscribe", auth, {

@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { BrandMark } from "../components/BrandMark";
 import { Button } from "../components/Button";
 import { useTheme } from "../theme";
-import { authRequest } from "../lib/api";
+import { authRequest, describeApiError } from "../lib/api";
 
 export function ForgotPasswordScreen({
   onCodeRequested,
@@ -13,6 +14,7 @@ export function ForgotPasswordScreen({
   onBackToLogin: () => void;
 }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -21,7 +23,7 @@ export function ForgotPasswordScreen({
 
   const requestCode = async () => {
     if (!email.trim()) {
-      setError("Bitte eine E-Mail-Adresse angeben.");
+      setError(t("forgotPassword.validationError"));
       return;
     }
     setError(null);
@@ -34,7 +36,7 @@ export function ForgotPasswordScreen({
       setDevCode(response.resetCode);
       setSent(true);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Anfrage fehlgeschlagen");
+      setError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
     }
@@ -46,17 +48,15 @@ export function ForgotPasswordScreen({
         <View style={styles.hero}>
           <BrandMark />
           <Text style={styles.wordmark}>Our Sport</Text>
-          <Text style={styles.tagline}>Passwort zuruecksetzen</Text>
+          <Text style={styles.tagline}>{t("forgotPassword.tagline")}</Text>
         </View>
-        <Text style={styles.title}>Passwort vergessen?</Text>
-        <Text style={styles.helper}>
-          Gib deine E-Mail ein, wir schicken dir einen Code zum Zuruecksetzen.
-        </Text>
-        <Text style={styles.label}>E-Mail</Text>
+        <Text style={styles.title}>{t("forgotPassword.title")}</Text>
+        <Text style={styles.helper}>{t("forgotPassword.helper")}</Text>
+        <Text style={styles.label}>{t("common.emailLabel")}</Text>
         <TextInput
           value={email}
           onChangeText={setEmail}
-          placeholder="du@beispiel.ch"
+          placeholder={t("common.emailPlaceholder")}
           placeholderTextColor={C.mist}
           style={styles.input}
           autoCapitalize="none"
@@ -66,21 +66,18 @@ export function ForgotPasswordScreen({
         {error && <Text style={styles.errorText}>{error}</Text>}
         {sent ? (
           <>
-            <Text style={styles.helper}>
-              Falls die E-Mail existiert, haben wir dir einen Code geschickt.
-              Pruefe dein Postfach.
-            </Text>
-            <Button label="Code eingeben" onPress={() => onCodeRequested(email.trim(), devCode)} />
+            <Text style={styles.helper}>{t("forgotPassword.sentHelper")}</Text>
+            <Button label={t("forgotPassword.enterCode")} onPress={() => onCodeRequested(email.trim(), devCode)} />
           </>
         ) : (
           <Button
-            label={submitting ? "Wird gesendet..." : "Code senden"}
+            label={submitting ? t("forgotPassword.submitting") : t("forgotPassword.submit")}
             onPress={requestCode}
             disabled={submitting}
           />
         )}
         <Pressable onPress={onBackToLogin}>
-          <Text style={styles.switchLink}>Zurueck zur Anmeldung</Text>
+          <Text style={styles.switchLink}>{t("forgotPassword.backToLogin")}</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

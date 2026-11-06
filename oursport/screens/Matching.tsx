@@ -3,6 +3,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Alert, Image, ScrollView, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Chip } from "../components/Chip";
@@ -13,6 +14,7 @@ import { SwipeCard, type SwipeCardHandle, type SwipeDirection } from "../compone
 import { AuthContext, ProfileContext } from "../context/AppContext";
 import { apiRequest, describeApiError } from "../lib/api";
 import { sports } from "../lib/constants";
+import { translateLevel, translateSport } from "../lib/i18n";
 import { hapticImpact } from "../lib/haptics";
 import type { Candidate, MatchInfo } from "../lib/types";
 import { useTheme } from "../theme";
@@ -21,6 +23,7 @@ import type { RootStackParamList } from "../navigation/types";
 
 export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const auth = useContext(AuthContext);
   const profile = useContext(ProfileContext);
   const navigation =
@@ -109,7 +112,7 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
     } catch (caught) {
       // requeue the candidate so the user can retry instead of silently losing the swipe
       setQueue((rest) => [candidate, ...rest]);
-      setSwipeError(describeApiError(caught, "Verbindungsfehler, bitte erneut versuchen"));
+      setSwipeError(describeApiError(caught, t("errors.generic")));
     } finally {
       setSubmitting(false);
       setIsAnimatingAway(false);
@@ -140,25 +143,25 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
       });
     } catch (caught) {
       setQueue((rest) => [candidate, ...rest]);
-      setSwipeError(describeApiError(caught, "Blockieren fehlgeschlagen, bitte erneut versuchen"));
+      setSwipeError(describeApiError(caught, t("errors.generic")));
     }
   };
 
   const confirmBlockCandidate = (candidate: Candidate) => {
-    Alert.alert(`${candidate.name} blockieren?`, "Ihr seht euch danach nicht mehr beim Matching.", [
-      { text: "Abbrechen", style: "cancel" },
-      { text: "Blockieren", style: "destructive", onPress: () => void blockCandidate(candidate) },
+    Alert.alert(t("matching.blockConfirmTitle", { name: candidate.name }), t("matching.blockConfirmBody"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("common.block"), style: "destructive", onPress: () => void blockCandidate(candidate) },
     ]);
   };
 
   const openCardMenu = (candidate: Candidate) => {
     Alert.alert(candidate.name, undefined, [
       {
-        text: "Melden",
+        text: t("common.report"),
         onPress: () => navigation.navigate("Report", { userId: candidate.userId, name: candidate.name }),
       },
-      { text: "Blockieren", style: "destructive", onPress: () => confirmBlockCandidate(candidate) },
-      { text: "Abbrechen", style: "cancel" },
+      { text: t("common.block"), style: "destructive", onPress: () => confirmBlockCandidate(candidate) },
+      { text: t("common.cancel"), style: "cancel" },
     ]);
   };
 
@@ -171,11 +174,11 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
       contentContainerStyle={styles.screen}
       showsVerticalScrollIndicator={false}
     >
-      <Header title="Matching" accentColor="volt" />
+      <Header title={t("tabs.matching")} accentColor="volt" />
       {profile && (
         <View style={styles.greetingRow}>
-          <Text style={styles.greetingTitle}>Hallo, {profile.name} 👋</Text>
-          <Text style={styles.greetingStat}>{freshCount} neue Profile in deiner Naehe</Text>
+          <Text style={styles.greetingTitle}>{t("matching.greeting", { name: profile.name })}</Text>
+          <Text style={styles.greetingStat}>{t("matching.freshCount", { count: freshCount })}</Text>
         </View>
       )}
       <ScrollView
@@ -186,7 +189,7 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
         {sports.map((item) => (
           <Chip
             key={item}
-            label={item}
+            label={translateSport(item)}
             selected={sportFilter === item}
             onPress={() => setSportFilter((current) => (current === item ? null : item))}
           />
@@ -195,15 +198,15 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
       {noMoreCandidates ? (
         <EmptyState
           icon="checkmark-circle-outline"
-          title="Das war's fuers Erste"
-          body="Schau spaeter wieder vorbei, dann warten neue Trainingspartner auf dich."
+          title={t("matching.noMoreTitle")}
+          body={t("matching.noMoreBody")}
         />
       ) : failedToLoad ? (
         <EmptyState
           icon="cloud-offline-outline"
-          title="Verbindungsfehler"
-          body="Kandidaten konnten nicht geladen werden."
-          actionLabel="Erneut versuchen"
+          title={t("matching.loadErrorTitle")}
+          body={t("matching.loadErrorBody")}
+          actionLabel={t("common.retry")}
           onAction={() => void loadCandidates(cursor)}
         />
       ) : current ? (
@@ -227,14 +230,14 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
                   variant="secondary"
                   style={styles.cardMenuButton}
                   onPress={() => openCardMenu(current)}
-                  accessibilityLabel="Weitere Optionen"
+                  accessibilityLabel={t("common.moreOptions")}
                   icon={<Ionicons name="ellipsis-horizontal" size={18} color={C.ink} />}
                 />
               </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardName}>{current.name}</Text>
                 <Text style={styles.cardMeta}>
-                  {current.sport} · {current.level}
+                  {translateSport(current.sport)} · {translateLevel(current.level)}
                 </Text>
                 {current.bio && (
                   <View style={styles.tags}>
@@ -254,7 +257,7 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
               style={styles.pass}
               onPress={() => handleTap("pass")}
               disabled={submitting || isAnimatingAway}
-              accessibilityLabel="Ablehnen"
+              accessibilityLabel={t("matching.passLabel")}
               icon={<Ionicons name="close" size={30} color={C.ink} />}
             />
             <Button
@@ -263,7 +266,7 @@ export function Matching({ onMatch }: { onMatch: (match: MatchInfo) => void }) {
               style={styles.like}
               onPress={() => handleTap("like")}
               disabled={submitting || isAnimatingAway}
-              accessibilityLabel="Gefaellt mir"
+              accessibilityLabel={t("matching.likeLabel")}
               icon={<Ionicons name="heart" size={24} color={COURT_FIXED} />}
             />
           </View>

@@ -1,39 +1,52 @@
+import i18n from "./i18n";
 import type { EventSummary } from "./types";
 import type { Palette } from "../theme/tokens";
 import { INK_FIXED } from "../theme/tokens";
 
-export function formatRelativeTime(iso: string) {
+// Per-locale Intl tag for date/time formatting (see Decisions: fixed regional
+// variants with 24-hour time forced on all three, not locale-default AM/PM).
+const intlLocaleTags: Record<string, string> = { de: "de-CH", en: "en-US", fr: "fr-FR" };
+function intlLocale(locale: string) {
+  return intlLocaleTags[locale] ?? intlLocaleTags.de;
+}
+
+export function formatRelativeTime(iso: string, locale: string = i18n.language) {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diffMs / 60000);
-  if (minutes < 1) return "Jetzt";
-  if (minutes < 60) return `vor ${minutes} Min.`;
+  if (minutes < 1) return i18n.t("format.now", { lng: locale });
+  if (minutes < 60) return i18n.t("format.minutesAgo", { count: minutes, lng: locale });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `vor ${hours} Std.`;
+  if (hours < 24) return i18n.t("format.hoursAgo", { count: hours, lng: locale });
   const days = Math.floor(hours / 24);
-  return `vor ${days} Tg.`;
+  return i18n.t("format.daysAgo", { count: days, lng: locale });
 }
 
-export function formatMessageTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" });
+export function formatMessageTime(iso: string, locale: string = i18n.language) {
+  return new Date(iso).toLocaleTimeString(intlLocale(locale), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
-const eventMonthNames = ["Jan", "Feb", "Maer", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 export function formatEventDay(iso: string) {
   return String(new Date(iso).getDate()).padStart(2, "0");
 }
-export function formatEventMonth(iso: string) {
-  return eventMonthNames[new Date(iso).getMonth()];
+export function formatEventMonth(iso: string, locale: string = i18n.language) {
+  return new Intl.DateTimeFormat(intlLocale(locale), { month: "short" }).format(new Date(iso));
 }
 export function formatEventTime(iso: string) {
   const date = new Date(iso);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 export function eventJoinLabel(event: EventSummary, waitlistPosition?: number) {
-  if (event.isCreator) return "Gastgeber";
-  if (event.isAttending) return "Dabei ✓";
-  if (event.isWaitlisted) return `Warteliste verlassen · Platz ${waitlistPosition ?? event.waitlistCount}`;
-  if (event.spotsLeft === 0) return "Warteliste beitreten";
-  return "Beitreten";
+  if (event.isCreator) return i18n.t("format.eventJoin.host");
+  if (event.isAttending) return i18n.t("format.eventJoin.attending");
+  if (event.isWaitlisted) {
+    return i18n.t("format.eventJoin.waitlistLeave", { position: waitlistPosition ?? event.waitlistCount });
+  }
+  if (event.spotsLeft === 0) return i18n.t("format.eventJoin.waitlistJoin");
+  return i18n.t("format.eventJoin.join");
 }
 
 // Shared with Events and EventDetailScreen's join button, which otherwise

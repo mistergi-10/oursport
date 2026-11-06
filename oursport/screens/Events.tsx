@@ -2,6 +2,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Chip } from "../components/Chip";
@@ -11,6 +12,7 @@ import { CardSkeleton } from "../components/Skeleton";
 import { AuthContext } from "../context/AppContext";
 import { apiRequest, describeApiError } from "../lib/api";
 import { sports } from "../lib/constants";
+import { translateSport } from "../lib/i18n";
 import { hapticImpact } from "../lib/haptics";
 import {
   eventActionPath,
@@ -28,6 +30,7 @@ import type { RootStackParamList } from "../navigation/types";
 
 export function Events() {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const auth = useContext(AuthContext);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList, "Main">>();
@@ -43,7 +46,7 @@ export function Events() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sportFilter, setSportFilter] = useState<string | null>(null);
   const [actionErrorEventId, setActionErrorEventId] = useState<string | null>(null);
-  const [actionErrorMessage, setActionErrorMessage] = useState("Aktion fehlgeschlagen, bitte erneut versuchen");
+  const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [pendingEventIds, setPendingEventIds] = useState<Set<string>>(new Set());
   const [waitlistPositions, setWaitlistPositions] = useState<Record<string, number>>({});
 
@@ -151,7 +154,7 @@ export function Events() {
       setEventsList((current) =>
         current.map((item) => (item.eventId === event.eventId ? event : item)),
       );
-      setActionErrorMessage(describeApiError(caught, "Aktion fehlgeschlagen, bitte erneut versuchen"));
+      setActionErrorMessage(describeApiError(caught, t("errors.generic")));
       setActionErrorEventId(event.eventId);
     } finally {
       setPendingEventIds((current) => {
@@ -164,11 +167,11 @@ export function Events() {
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
-      <Header title="Events" actionIcon="add" actionAccessibilityLabel="Event erstellen" onAction={() => navigation.navigate("CreateEvent")} accentColor="ember" />
+      <Header title={t("events.title")} actionIcon="add" actionAccessibilityLabel={t("events.createEvent")} onAction={() => navigation.navigate("CreateEvent")} accentColor="ember" />
       <TextInput
         value={searchQuery}
         onChangeText={setSearchQuery}
-        placeholder="Suche nach Ort oder Stichwort"
+        placeholder={t("events.searchPlaceholder")}
         placeholderTextColor={C.mist}
         style={[styles.input, { marginBottom: spacing.md }]}
       />
@@ -177,11 +180,11 @@ export function Events() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filterRow}
       >
-        <Chip label="Alle" selected={sportFilter === null} onPress={() => setSportFilter(null)} />
+        <Chip label={t("events.filterAll")} selected={sportFilter === null} onPress={() => setSportFilter(null)} />
         {sports.map((item) => (
           <Chip
             key={item}
-            label={item}
+            label={translateSport(item)}
             selected={sportFilter === item}
             onPress={() => setSportFilter(item)}
           />
@@ -189,7 +192,7 @@ export function Events() {
       </ScrollView>
       {forYouEvents.length > 0 && (
         <>
-          <Text style={styles.label}>Fuer dich</Text>
+          <Text style={styles.label}>{t("events.forYou")}</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -220,16 +223,16 @@ export function Events() {
       ) : loadError ? (
         <EmptyState
           icon="cloud-offline-outline"
-          title="Verbindungsfehler"
-          body="Events konnten nicht geladen werden."
-          actionLabel="Erneut versuchen"
+          title={t("events.loadErrorTitle")}
+          body={t("events.loadErrorBody")}
+          actionLabel={t("common.retry")}
           onAction={() => void loadEvents()}
         />
       ) : eventsList.length === 0 ? (
         <EmptyState
           icon="calendar-outline"
-          title="Keine Events gefunden"
-          body="Erstelle das erste Event ueber den Plus-Button oben."
+          title={t("events.emptyTitle")}
+          body={t("events.emptyBody")}
         />
       ) : (
         <>
@@ -260,7 +263,11 @@ export function Events() {
                 </View>
                 <View style={styles.eventFooter}>
                   <Text style={styles.helper}>
-                    {item.attendeeCount}/{item.capacity} · {item.spotsLeft} frei
+                    {t("events.capacityLabel", {
+                      attending: item.attendeeCount,
+                      capacity: item.capacity,
+                      spotsLeft: item.spotsLeft,
+                    })}
                   </Text>
                   <Button
                     variant={item.isAttending || item.isWaitlisted ? "ghost" : "primary"}
@@ -282,7 +289,7 @@ export function Events() {
             </Pressable>
           ))}
           {nextCursor && (
-            <Button variant="secondary" label="Mehr laden" loading={loadingMore} onPress={loadMore} disabled={loadingMore} />
+            <Button variant="secondary" label={t("common.loadMore")} loading={loadingMore} onPress={loadMore} disabled={loadingMore} />
           )}
         </>
       )}

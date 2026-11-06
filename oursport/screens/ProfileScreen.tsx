@@ -4,10 +4,13 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { useContext, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { Chip } from "../components/Chip";
 import { Header } from "../components/Header";
 import { AuthActionsContext, AuthContext, ProfileContext } from "../context/AppContext";
 import { apiRequest } from "../lib/api";
+import { localeDisplayNames, setLocale, supportedLocales, translateSport } from "../lib/i18n";
 import { disablePushNotifications, enablePushNotifications, getExistingPushSubscription, isPushSupported } from "../lib/push";
 import type { Profile } from "../lib/types";
 import { useTheme } from "../theme";
@@ -16,6 +19,7 @@ import type { RootStackParamList } from "../navigation/types";
 
 export function ProfileScreen() {
   const { palette: C, styles, scheme, toggleScheme } = useTheme();
+  const { t, i18n } = useTranslation();
   const profile = useContext(ProfileContext);
   const auth = useContext(AuthContext);
   const { logout, updateProfile } = useContext(AuthActionsContext);
@@ -54,7 +58,7 @@ export function ProfileScreen() {
       setNotificationsEnabled(value);
     } catch (error) {
       setNotificationsError(
-        error instanceof Error ? error.message : "Benachrichtigungen konnten nicht geaendert werden.",
+        error instanceof Error ? error.message : t("profile.notificationsChangeFailed"),
       );
     } finally {
       setNotificationsBusy(false);
@@ -68,7 +72,7 @@ export function ProfileScreen() {
     setPhotoError(null);
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      setPhotoError("Zugriff auf Fotos wurde nicht erlaubt.");
+      setPhotoError(t("profile.photoAccessDenied"));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -81,7 +85,7 @@ export function ProfileScreen() {
     if (result.canceled || !result.assets[0]?.base64) return;
     const photoUrl = `data:image/jpeg;base64,${result.assets[0].base64}`;
     if (photoUrl.length > 350_000) {
-      setPhotoError("Foto ist zu gross, bitte ein kleineres Bild waehlen.");
+      setPhotoError(t("profile.photoTooLarge"));
       return;
     }
     setUploadingPhoto(true);
@@ -98,7 +102,7 @@ export function ProfileScreen() {
       });
       updateProfile(updated);
     } catch {
-      setPhotoError("Foto konnte nicht gespeichert werden.");
+      setPhotoError(t("profile.photoSaveFailed"));
     } finally {
       setUploadingPhoto(false);
     }
@@ -111,7 +115,7 @@ export function ProfileScreen() {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) {
-        setLocationError("Zugriff auf den Standort wurde nicht erlaubt.");
+        setLocationError(t("profile.locationAccessDenied"));
         return;
       }
       const position = await Location.getCurrentPositionAsync({});
@@ -128,7 +132,7 @@ export function ProfileScreen() {
       });
       updateProfile(updated);
     } catch {
-      setLocationError("Standort konnte nicht ermittelt werden.");
+      setLocationError(t("profile.locationFailed"));
     } finally {
       setLocatingBusy(false);
     }
@@ -136,13 +140,13 @@ export function ProfileScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
-      <Header title="Profil" accentColor="mist" />
+      <Header title={t("profile.title")} accentColor="mist" />
       <View style={styles.profileHead}>
         <Pressable
           onPress={() => void pickPhoto()}
           disabled={uploadingPhoto}
           accessibilityRole="button"
-          accessibilityLabel="Profilfoto aendern"
+          accessibilityLabel={t("profile.changePhoto")}
         >
           <View style={styles.profileAvatar}>
             {profile.photoUrl ? (
@@ -165,13 +169,13 @@ export function ProfileScreen() {
         </Pressable>
         <Text style={styles.profileName}>{profile.name}</Text>
         <Text style={styles.profileSub}>
-          {profile.city} · {profile.sport}
+          {profile.city} · {translateSport(profile.sport)}
         </Text>
         {photoError && <Text style={styles.errorText}>{photoError}</Text>}
       </View>
-      <Text style={styles.label}>Darstellung</Text>
+      <Text style={styles.label}>{t("profile.appearance")}</Text>
       <View style={styles.settings}>
-        <Text style={styles.settingsText}>Dunkles Design</Text>
+        <Text style={styles.settingsText}>{t("profile.darkMode")}</Text>
         <Switch
           value={scheme === "dark"}
           onValueChange={toggleScheme}
@@ -179,14 +183,25 @@ export function ProfileScreen() {
           thumbColor={COURT_FIXED}
         />
       </View>
-      <Text style={styles.label}>Benachrichtigungen</Text>
+      <Text style={styles.label}>{t("profile.language")}</Text>
+      <View style={[styles.settings, { flexWrap: "wrap", gap: spacing.sm }]}>
+        {supportedLocales.map((locale) => (
+          <Chip
+            key={locale}
+            label={localeDisplayNames[locale]}
+            selected={i18n.language === locale}
+            onPress={() => void setLocale(locale)}
+          />
+        ))}
+      </View>
+      <Text style={styles.label}>{t("profile.notifications")}</Text>
       <View style={styles.settings}>
         <View style={{ flex: 1, marginRight: spacing.md }}>
-          <Text style={styles.settingsText}>Push-Benachrichtigungen</Text>
+          <Text style={styles.settingsText}>{t("profile.pushTitle")}</Text>
           <Text style={styles.helper}>
             {pushSupported
-              ? "Erhalte Hinweise zu Matches, Nachrichten und freien Event-Plaetzen."
-              : "Nur in der Web-App verfuegbar. Native Push folgt in einer spaeteren Version."}
+              ? t("profile.pushSupportedBody")
+              : t("profile.pushUnsupportedBody")}
           </Text>
           {notificationsError && <Text style={styles.errorText}>{notificationsError}</Text>}
         </View>
@@ -202,16 +217,16 @@ export function ProfileScreen() {
           />
         )}
       </View>
-      <Text style={styles.label}>Konto</Text>
+      <Text style={styles.label}>{t("profile.account")}</Text>
       {[
-        "Persoenliche Angaben",
-        "Sportarten & Level",
-        "Verfuegbarkeit",
+        t("profile.personalInfo"),
+        t("profile.sportsLevel"),
+        t("profile.availability"),
       ].map((item) => (
         <Pressable
           style={styles.settings}
           key={item}
-          onPress={() => Alert.alert("Bald verfuegbar", `${item} folgt in Kuerze.`)}
+          onPress={() => Alert.alert(t("profile.comingSoonTitle"), t("profile.comingSoonBody", { item }))}
         >
           <Text style={styles.settingsText}>{item}</Text>
           <Ionicons name="chevron-forward" size={18} color={C.mist} />
@@ -219,11 +234,11 @@ export function ProfileScreen() {
       ))}
       <Pressable style={styles.settings} onPress={() => void useCurrentLocation()} disabled={locatingBusy}>
         <View style={{ flex: 1, marginRight: spacing.md }}>
-          <Text style={styles.settingsText}>Standort verwenden</Text>
+          <Text style={styles.settingsText}>{t("profile.useLocation")}</Text>
           <Text style={styles.helper}>
             {profile.latitude != null && profile.longitude != null
-              ? "Aktueller Standort ist gespeichert. Tippen zum Aktualisieren."
-              : "Nutze deinen aktuellen Standort fuer bessere Vorschlaege in der Naehe."}
+              ? t("profile.locationSavedBody")
+              : t("profile.locationPromptBody")}
           </Text>
           {locationError && <Text style={styles.errorText}>{locationError}</Text>}
         </View>
@@ -234,11 +249,11 @@ export function ProfileScreen() {
         )}
       </Pressable>
       <Pressable style={styles.settings} onPress={() => navigation.navigate("Privacy")}>
-        <Text style={styles.settingsText}>Daten & DSGVO</Text>
+        <Text style={styles.settingsText}>{t("profile.privacyRow")}</Text>
         <Ionicons name="chevron-forward" size={18} color={C.mist} />
       </Pressable>
       <Pressable style={styles.settings} onPress={logout}>
-        <Text style={[styles.settingsText, { color: C.ember }]}>Abmelden</Text>
+        <Text style={[styles.settingsText, { color: C.ember }]}>{t("profile.logout")}</Text>
         <Ionicons name="chevron-forward" size={18} color={C.mist} />
       </Pressable>
     </ScrollView>

@@ -125,3 +125,5 @@ The API build and Expo TypeScript check pass. Without a local PostgreSQL instanc
 Slices 1-6 (identity provider, discover/swipes/matches, conversations, events, blocks/reports/privacy, design system & UI polish) have shipped. The app now has a token-based theme system (`oursport/theme/`), shared `Button`/`Card`/`EmptyState`/`Skeleton`/`Chip` components, drag-to-swipe matching (`react-native-gesture-handler`/`react-native-reanimated`/`moti`), an animated match overlay, and accessibility labels.
 
 7. Pro revamp (smarter matching/events, real-time chat, web push, maps preview, UI polish pass 2) — see `docs/requirements/07-pro-revamp.md`.
+8. Multi-language support (German/English/French, auto-detected on first launch with persisted manual override) — see `docs/requirements/08-i18n.md`.
+9. Events depth (post-event photo recap gallery, peer ratings between attendees, per-event group chat, "my events"/past-events filter) — see `docs/requirements/09-events-depth.md`.

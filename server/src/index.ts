@@ -234,7 +234,7 @@ app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, b
 
 app.register(rateLimit, {
   global: false,
-  errorResponseBuilder: () => ({ error: "Too many requests" }),
+  errorResponseBuilder: () => errorBody("Too many requests", "rate_limited"),
 });
 
 function ipAndEmailKey(request: { ip: string; body?: unknown }) {
@@ -261,6 +261,12 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     (error as { code?: string }).code === "23505"
   );
+}
+
+// Stable, machine-readable companion to the human-readable `error` string, so
+// the client can map a response to a translated message without parsing English.
+function errorBody(error: string, code: string) {
+  return { error, code };
 }
 
 function encodeCursor(sortAt: Date, id: string) {
@@ -328,7 +334,7 @@ app.post(
     .select({ id: users.id })
     .from(users)
     .where(eq(users.email, body.email));
-  if (existing) return reply.code(409).send({ error: "Email is already registered" });
+  if (existing) return reply.code(409).send(errorBody("Email is already registered", "email_taken"));
 
   const authSubject = `password:${body.email}`;
   let user: { id: string };
@@ -340,7 +346,7 @@ app.post(
   } catch (error) {
     // A concurrent signup for the same email can slip past the earlier check; the
     // unique constraint on users.email is the source of truth.
-    if (isUniqueViolation(error)) return reply.code(409).send({ error: "Email is already registered" });
+    if (isUniqueViolation(error)) return reply.code(409).send(errorBody("Email is already registered", "email_taken"));
     throw error;
   }
 
@@ -382,7 +388,7 @@ app.post(
   // timing doesn't reveal whether the email is registered.
   const passwordValid = verifyPassword(body.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!user?.passwordHash || !passwordValid) {
-    return reply.code(401).send({ error: "Invalid email or password" });
+    return reply.code(401).send(errorBody("Invalid email or password", "invalid_credentials"));
   }
 
   const [profile] = await database
@@ -454,7 +460,7 @@ app.post(
       .where(eq(users.email, body.email));
 
     if (!user) {
-      return reply.code(400).send({ error: "Invalid or expired code" });
+      return reply.code(400).send(errorBody("Invalid or expired code", "invalid_or_expired_code"));
     }
 
     const codeHash = createHash("sha256").update(body.code).digest("hex");
@@ -494,7 +500,7 @@ app.post(
     });
 
     if (!success) {
-      return reply.code(400).send({ error: "Invalid or expired code" });
+      return reply.code(400).send(errorBody("Invalid or expired code", "invalid_or_expired_code"));
     }
 
     return reply.code(200).send({ status: "ok" });
@@ -511,7 +517,7 @@ app.get("/v1/me", async (request, reply) => {
     .from(profiles)
     .where(eq(profiles.userId, userId));
 
-  if (!profile) return reply.code(404).send({ error: "Profile not found" });
+  if (!profile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
   return toProfileResponse(profile);
 });
 
@@ -571,7 +577,7 @@ app.patch("/v1/me", async (request, reply) => {
     .where(eq(profiles.userId, userId))
     .returning();
 
-  if (!profile) return reply.code(404).send({ error: "Profile not found" });
+  if (!profile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
   return toProfileResponse(profile);
 });
 
@@ -585,12 +591,12 @@ app.get("/v1/discover", async (request, reply) => {
     .select({ city: profiles.city, sport: profiles.sport, latitude: profiles.latitude, longitude: profiles.longitude })
     .from(profiles)
     .where(eq(profiles.userId, userId));
-  if (!callerProfile) return reply.code(404).send({ error: "Profile not found" });
+  if (!callerProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
   let cursor: { score: number; sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeScoreCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const alreadySwiped = database
@@ -725,7 +731,7 @@ app.post(
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   if (body.targetUserId === userId) {
-    return reply.code(400).send({ error: "Cannot swipe on your own profile" });
+    return reply.code(400).send(errorBody("Cannot swipe on your own profile", "cannot_swipe_self"));
   }
 
   // Mirrors the target-profile-not-found shape below so a blocked pair can't tell
@@ -744,7 +750,7 @@ app.post(
       .from(profiles)
       .where(eq(profiles.userId, body.targetUserId)),
   ]);
-  if (blocked || !targetProfile) return reply.code(404).send({ error: "Profile not found" });
+  if (blocked || !targetProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
   const userLowId = userId < body.targetUserId ? userId : body.targetUserId;
   const userHighId = userId < body.targetUserId ? body.targetUserId : userId;
@@ -840,7 +846,7 @@ app.get("/v1/matches", async (request, reply) => {
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const rows = await database
@@ -912,7 +918,7 @@ app.get("/v1/conversations", async (request, reply) => {
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const lastMessage = database
@@ -1030,7 +1036,7 @@ app.post(
     const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
     const conversation = await findConversationForParticipant(database, params.conversationId, userId);
-    if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+    if (!conversation) return reply.code(404).send(errorBody("Conversation not found", "conversation_not_found"));
 
     await database
       .insert(conversationReads)
@@ -1052,12 +1058,12 @@ app.get("/v1/conversations/:conversationId/messages", async (request, reply) => 
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   const conversation = await findConversationForParticipant(database, params.conversationId, userId);
-  if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+  if (!conversation) return reply.code(404).send(errorBody("Conversation not found", "conversation_not_found"));
 
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const rows = await database
@@ -1144,7 +1150,7 @@ app.post(
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   const conversation = await findConversationForParticipant(database, params.conversationId, userId);
-  if (!conversation) return reply.code(404).send({ error: "Conversation not found" });
+  if (!conversation) return reply.code(404).send(errorBody("Conversation not found", "conversation_not_found"));
 
   const [message] = await database
     .insert(messages)
@@ -1199,7 +1205,7 @@ app.post(
     .select({ displayName: profiles.displayName })
     .from(profiles)
     .where(eq(profiles.userId, userId));
-  if (!creatorProfile) return reply.code(404).send({ error: "Profile not found" });
+  if (!creatorProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
   const description = body.description && body.description.length > 0 ? body.description : null;
 
@@ -1268,7 +1274,7 @@ app.get("/v1/events", async (request, reply) => {
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const result = await fetchEventsPage(database, userId, {
@@ -1292,12 +1298,12 @@ app.get("/v1/events/for-you", async (request, reply) => {
     .select({ city: profiles.city, sport: profiles.sport })
     .from(profiles)
     .where(eq(profiles.userId, userId));
-  if (!callerProfile) return reply.code(404).send({ error: "Profile not found" });
+  if (!callerProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
-    if (!cursor) return reply.code(400).send({ error: "Invalid cursor" });
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
   }
 
   const result = await fetchEventsPage(database, userId, {
@@ -1316,7 +1322,7 @@ app.get("/v1/events/:eventId", async (request, reply) => {
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
   const core = await loadEventCore(database, params.eventId);
-  if (!core) return reply.code(404).send({ error: "Event not found" });
+  if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
 
   const memberRows = await loadEventMembers(database, params.eventId);
   const waitlistRows = await loadEventWaitlist(database, params.eventId);
@@ -1360,9 +1366,9 @@ app.post(
     return { status: "ok" as const, core, memberRows: finalMemberRows, waitlistRows };
   });
 
-  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
-  if (result.status === "past") return reply.code(400).send({ error: "Event has already started" });
-  if (result.status === "full") return reply.code(409).send({ error: "Event is full" });
+  if (result.status === "not_found") return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+  if (result.status === "past") return reply.code(400).send(errorBody("Event has already started", "event_already_started"));
+  if (result.status === "full") return reply.code(409).send(errorBody("Event is full", "event_full"));
 
   return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
   },
@@ -1425,9 +1431,9 @@ app.post(
     };
   });
 
-  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
+  if (result.status === "not_found") return reply.code(404).send(errorBody("Event not found", "event_not_found"));
   if (result.status === "creator") {
-    return reply.code(400).send({ error: "Creator cannot leave their own event" });
+    return reply.code(400).send(errorBody("Creator cannot leave their own event", "creator_cannot_leave"));
   }
 
   // Best-effort push, sent after the transaction above already committed.
@@ -1472,9 +1478,9 @@ app.post(
     return { status: "ok" as const, core, memberRows, waitlistRows };
   });
 
-  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
-  if (result.status === "creator") return reply.code(400).send({ error: "Creator is already attending" });
-  if (result.status === "attending") return reply.code(400).send({ error: "Already attending this event" });
+  if (result.status === "not_found") return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+  if (result.status === "creator") return reply.code(400).send(errorBody("Creator is already attending", "creator_already_attending"));
+  if (result.status === "attending") return reply.code(400).send(errorBody("Already attending this event", "already_attending"));
 
   const waitlistPosition = result.waitlistRows.findIndex((row) => row.userId === userId) + 1;
   return reply.send({
@@ -1509,7 +1515,7 @@ app.post(
     return { status: "ok" as const, core, memberRows, waitlistRows };
   });
 
-  if (result.status === "not_found") return reply.code(404).send({ error: "Event not found" });
+  if (result.status === "not_found") return reply.code(404).send(errorBody("Event not found", "event_not_found"));
 
   return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
   },
@@ -1525,14 +1531,14 @@ app.post(
     const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
     if (body.userId === userId) {
-      return reply.code(400).send({ error: "Cannot block your own profile" });
+      return reply.code(400).send(errorBody("Cannot block your own profile", "cannot_block_self"));
     }
 
     const [targetProfile] = await database
       .select({ userId: profiles.userId })
       .from(profiles)
       .where(eq(profiles.userId, body.userId));
-    if (!targetProfile) return reply.code(404).send({ error: "Profile not found" });
+    if (!targetProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
     await database
       .insert(blocks)
@@ -1589,14 +1595,14 @@ app.post(
     const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
     if (body.userId === userId) {
-      return reply.code(400).send({ error: "Cannot report your own profile" });
+      return reply.code(400).send(errorBody("Cannot report your own profile", "cannot_report_self"));
     }
 
     const [targetProfile] = await database
       .select({ userId: profiles.userId })
       .from(profiles)
       .where(eq(profiles.userId, body.userId));
-    if (!targetProfile) return reply.code(404).send({ error: "Profile not found" });
+    if (!targetProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
 
     await database.insert(reports).values({
       reporterUserId: userId,
@@ -1622,13 +1628,13 @@ app.delete(
       .select({ passwordHash: users.passwordHash, tokenVersion: users.tokenVersion })
       .from(users)
       .where(eq(users.id, userId));
-    if (!user) return reply.code(404).send({ error: "User not found" });
+    if (!user) return reply.code(404).send(errorBody("User not found", "user_not_found"));
 
     // Always perform a real password compare, even for dev-bridge accounts with no
     // passwordHash, so response timing doesn't vary by account type.
     const passwordValid = verifyPassword(body.password ?? "", user.passwordHash ?? DUMMY_PASSWORD_HASH);
     if (user.passwordHash && !passwordValid) {
-      return reply.code(401).send({ error: "Invalid password" });
+      return reply.code(401).send(errorBody("Invalid password", "invalid_password"));
     }
 
     await database.transaction(async (tx) => {
@@ -1718,13 +1724,13 @@ app.post(
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof AuthenticationError) {
-    return reply.code(error.statusCode).send({ error: error.message });
+    return reply.code(error.statusCode).send({ error: error.message, code: error.code });
   }
   if (error instanceof z.ZodError) {
-    return reply.code(400).send({ error: "Invalid request", details: error.flatten() });
+    return reply.code(400).send({ ...errorBody("Invalid request", "validation_error"), details: error.flatten() });
   }
   app.log.error(error);
-  return reply.code(500).send({ error: "Internal server error" });
+  return reply.code(500).send(errorBody("Internal server error", "internal_error"));
 });
 
 async function resolveUserId(subject: string, developmentUserId?: string, tokenVersion?: number) {
@@ -1737,7 +1743,7 @@ async function resolveUserId(subject: string, developmentUserId?: string, tokenV
       .select({ id: users.id, deletedAt: users.deletedAt })
       .from(users)
       .where(eq(users.id, developmentUserId));
-    if (!user || user.deletedAt) throw new AuthenticationError("User is not registered");
+    if (!user || user.deletedAt) throw new AuthenticationError("User is not registered", "user_not_registered");
     return user.id;
   }
 
@@ -1745,9 +1751,9 @@ async function resolveUserId(subject: string, developmentUserId?: string, tokenV
     .select({ id: users.id, tokenVersion: users.tokenVersion, deletedAt: users.deletedAt })
     .from(users)
     .where(eq(users.authSubject, subject));
-  if (!user || user.deletedAt) throw new AuthenticationError("User is not registered");
+  if (!user || user.deletedAt) throw new AuthenticationError("User is not registered", "user_not_registered");
   if (tokenVersion !== undefined && tokenVersion !== user.tokenVersion) {
-    throw new AuthenticationError("Token has been revoked");
+    throw new AuthenticationError("Token has been revoked", "token_revoked");
   }
   return user.id;
 }

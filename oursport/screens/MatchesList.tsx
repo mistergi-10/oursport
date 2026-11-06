@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useCallback, useContext, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -16,6 +17,7 @@ import type { RootStackParamList } from "../navigation/types";
 
 export function MatchesList() {
   const { palette: C, styles } = useTheme();
+  const { t } = useTranslation();
   const matchAvatarColors = [C.ember, "#69B7EA", "#A98BEE"];
   const auth = useContext(AuthContext);
   const navigation =
@@ -72,7 +74,7 @@ export function MatchesList() {
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
-      <Header title="Chats" />
+      <Header title={t("tabs.chats")} />
       {loading ? (
         <>
           <RowSkeleton />
@@ -82,8 +84,8 @@ export function MatchesList() {
       ) : conversationsList.length === 0 ? (
         <EmptyState
           icon="chatbubble-outline"
-          title="Noch keine Matches"
-          body="Sobald es ein Match gibt, taucht es hier auf."
+          title={t("matchesList.emptyTitle")}
+          body={t("matchesList.emptyBody")}
         />
       ) : (
         <>
@@ -114,7 +116,7 @@ export function MatchesList() {
               <View style={styles.chatInfo}>
                 <Text style={styles.chatName}>{item.name}</Text>
                 <Text style={styles.chatPreview} numberOfLines={1}>
-                  {item.lastMessage ? item.lastMessage.body : "Sag Hallo 👋"}
+                  {item.lastMessage ? item.lastMessage.body : t("matchesList.sayHello")}
                 </Text>
               </View>
               <View style={styles.chatMeta}>
@@ -128,7 +130,7 @@ export function MatchesList() {
           {nextCursor && (
             <Button
               variant="secondary"
-              label="Mehr laden"
+              label={t("common.loadMore")}
               loading={loadingMore}
               onPress={loadMore}
               disabled={loadingMore}
