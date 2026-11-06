@@ -1370,6 +1370,9 @@ app.get("/v1/events/:eventId", async (request, reply) => {
 
   const core = await loadEventCore(database, params.eventId);
   if (!core) return reply.code(404).send({ error: "Event not found" });
+  // Guarantees conversationId is genuinely always present as documented, including
+  // for events created before this slice shipped a conversations row at creation time.
+  core.conversationId = await ensureEventConversationId(database, params.eventId, core.conversationId);
 
   const memberRows = await loadEventMembers(database, params.eventId);
   const waitlistRows = await loadEventWaitlist(database, params.eventId);
@@ -1413,21 +1416,9 @@ app.get("/v1/events/:eventId/conversation", async (request, reply) => {
 
   const core = await loadEventCore(database, params.eventId);
   if (!core) return reply.code(404).send({ error: "Event not found" });
-  if (core.conversationId) return reply.send({ conversationId: core.conversationId });
 
-  const [created] = await database
-    .insert(conversations)
-    .values({ eventId: params.eventId })
-    .onConflictDoNothing({ target: conversations.eventId })
-    .returning({ id: conversations.id });
-  if (created) return reply.send({ conversationId: created.id });
-
-  // Lost a race with a concurrent first-access call; re-read what it inserted.
-  const [existing] = await database
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(eq(conversations.eventId, params.eventId));
-  return reply.send({ conversationId: existing.id });
+  const conversationId = await ensureEventConversationId(database, params.eventId, core.conversationId);
+  return reply.send({ conversationId });
 });
 
 app.post(
@@ -1447,6 +1438,9 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    // Backfills events created before this slice shipped a conversations row at
+    // creation time, so the response's conversationId (EventDetail contract) is never null.
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.startsAt.getTime() <= Date.now()) return { status: "past" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1495,6 +1489,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.creatorUserId === userId) return { status: "creator" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1585,6 +1580,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.creatorUserId === userId) return { status: "creator" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1623,6 +1619,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
 
     // Idempotent: removing a waitlist row the caller never had is not an error.
     await tx
@@ -2284,6 +2281,32 @@ async function loadEventCore(database: DatabaseOrTx, eventId: string) {
     .leftJoin(conversations, eq(conversations.eventId, events.id))
     .where(eq(events.id, eventId));
   return core ?? null;
+}
+
+// Fetch-or-create: new events already get a conversations row at creation time
+// (see POST /v1/events), but events created before this slice shipped have none
+// yet — this backfills one on first access so conversationId is genuinely always
+// present, as documented on GET /v1/events/:eventId and this endpoint's response.
+async function ensureEventConversationId(
+  database: DatabaseOrTx,
+  eventId: string,
+  existingConversationId: string | null,
+) {
+  if (existingConversationId) return existingConversationId;
+
+  const [created] = await database
+    .insert(conversations)
+    .values({ eventId })
+    .onConflictDoNothing({ target: conversations.eventId })
+    .returning({ id: conversations.id });
+  if (created) return created.id;
+
+  // Lost a race with a concurrent first-access call; re-read what it inserted.
+  const [existing] = await database
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.eventId, eventId));
+  return existing!.id;
 }
 
 // Ordered by joinedAt ASC so the creator (joined in the creation transaction) is
