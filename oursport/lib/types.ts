@@ -33,6 +33,7 @@ export type ConversationSummary = {
 export type ConversationMessage = {
   messageId: string;
   senderUserId: string;
+  senderName: string;
   body: string;
   createdAt: string;
 };
@@ -57,6 +58,34 @@ export type EventSummary = {
   isWaitlisted: boolean;
   seriesId: string | null;
 };
-export type EventAttendee = { userId: string; name: string };
-export type EventDetail = EventSummary & { attendees: EventAttendee[] };
+export type EventAttendee = {
+  userId: string;
+  name: string;
+  leftAt: string | null;
+  averageRating: number | null;
+  ratingCount: number;
+  canRate: boolean;
+};
+// conversationId is only ever present on the single-event detail response,
+// never on GET /v1/events list items — kept off the shared EventSummary base.
+export type EventDetail = EventSummary & { attendees: EventAttendee[]; conversationId: string };
+export type EventPhoto = {
+  photoId: string;
+  uploaderUserId: string;
+  uploaderName: string;
+  photoData: string;
+  caption: string | null;
+  createdAt: string;
+};
+export type RatingSummary = { averageRating: number | null; ratingCount: number };
+export type ReceivedRating = {
+  ratingId: string;
+  eventId: string;
+  eventTitle: string;
+  raterUserId: string;
+  raterName: string;
+  stars: number;
+  comment: string | null;
+  createdAt: string;
+};
 export type Auth = { token?: string; userId?: string };

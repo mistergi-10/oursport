@@ -122,6 +122,8 @@
     "createEvent": "Event erstellen",
     "searchPlaceholder": "Suche nach Ort oder Stichwort",
     "filterAll": "Alle",
+    "filterMine": "Meine kommenden",
+    "filterPast": "Meine vergangenen",
     "forYou": "Fuer dich",
     "loadErrorTitle": "Verbindungsfehler",
     "loadErrorBody": "Events konnten nicht geladen werden.",
@@ -165,7 +167,20 @@
     "organizerLabel": "Veranstalter",
     "spotsLabel": "Plaetze",
     "spotsValue": "{{attending}}/{{capacity}} belegt · {{spotsLeft}} frei",
-    "attendeesLabel": "Teilnehmer"
+    "attendeesLabel": "Teilnehmer",
+    "chatButton": "Zum Event-Chat",
+    "photosLabel": "Fotos",
+    "uploadPhoto": "Foto hochladen",
+    "photoCaptionPlaceholder": "Bildunterschrift (optional)",
+    "photoAccessDenied": "Zugriff auf Fotos wurde nicht erlaubt.",
+    "photoTooLarge": "Foto ist zu gross, bitte ein kleineres Bild waehlen.",
+    "photoUploadFailed": "Foto konnte nicht hochgeladen werden",
+    "leftAttendeeSuffix": "(nicht mehr dabei)",
+    "starsLabel_one": "{{count}} Stern",
+    "starsLabel_other": "{{count}} Sterne",
+    "commentPlaceholder": "Kommentar (optional)",
+    "rateButton": "Bewerten",
+    "ratingSubmitFailed": "Bewertung konnte nicht gespeichert werden"
   },
   "profile": {
     "title": "Profil",
@@ -193,7 +208,10 @@
     "locationSavedBody": "Aktueller Standort ist gespeichert. Tippen zum Aktualisieren.",
     "locationPromptBody": "Nutze deinen aktuellen Standort fuer bessere Vorschlaege in der Naehe.",
     "privacyRow": "Daten & DSGVO",
-    "logout": "Abmelden"
+    "logout": "Abmelden",
+    "ratingsLabel": "Deine Bewertungen",
+    "noRatingsYet": "Noch keine Bewertungen",
+    "ratingsHelper": "Bewertungen von Mitspielern nach gemeinsamen Events."
   },
   "privacy": {
     "headerTitle": "Daten & DSGVO",

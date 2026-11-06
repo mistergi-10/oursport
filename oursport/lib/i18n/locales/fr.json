@@ -122,6 +122,8 @@
     "createEvent": "Créer un événement",
     "searchPlaceholder": "Rechercher par lieu ou mot-clé",
     "filterAll": "Tous",
+    "filterMine": "Mes évènements à venir",
+    "filterPast": "Mes évènements passés",
     "forYou": "Pour toi",
     "loadErrorTitle": "Erreur de connexion",
     "loadErrorBody": "Impossible de charger les événements.",
@@ -165,7 +167,20 @@
     "organizerLabel": "Organisateur",
     "spotsLabel": "Places",
     "spotsValue": "{{attending}}/{{capacity}} occupées · {{spotsLeft}} libres",
-    "attendeesLabel": "Participants"
+    "attendeesLabel": "Participants",
+    "chatButton": "Aller au chat de l'évènement",
+    "photosLabel": "Photos",
+    "uploadPhoto": "Télécharger une photo",
+    "photoCaptionPlaceholder": "Légende (optionnelle)",
+    "photoAccessDenied": "L'accès aux photos n'a pas été autorisé.",
+    "photoTooLarge": "La photo est trop grande, veuillez choisir une image plus petite.",
+    "photoUploadFailed": "La photo n'a pas pu être téléchargée",
+    "leftAttendeeSuffix": "(ne participe plus)",
+    "starsLabel_one": "{{count}} étoile",
+    "starsLabel_other": "{{count}} étoiles",
+    "commentPlaceholder": "Commentaire (optionnel)",
+    "rateButton": "Évaluer",
+    "ratingSubmitFailed": "L'évaluation n'a pas pu être enregistrée"
   },
   "profile": {
     "title": "Profil",
@@ -193,7 +208,10 @@
     "locationSavedBody": "La position actuelle est enregistrée. Touche pour mettre à jour.",
     "locationPromptBody": "Utilise ta position actuelle pour de meilleures suggestions à proximité.",
     "privacyRow": "Données & confidentialité",
-    "logout": "Se déconnecter"
+    "logout": "Se déconnecter",
+    "ratingsLabel": "Tes évaluations",
+    "noRatingsYet": "Pas encore d'évaluations",
+    "ratingsHelper": "Évaluations des autres joueurs après des évènements communs."
   },
   "privacy": {
     "headerTitle": "Données & confidentialité",

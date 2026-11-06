@@ -5,7 +5,7 @@ export type RootStackParamList = {
   ForgotPassword: undefined;
   ResetPassword: { email: string; devCode?: string };
   Main: { screen?: keyof MainTabParamList } | undefined;
-  Conversation: { conversationId: string; name: string; userId: string };
+  Conversation: { conversationId: string; name: string; userId?: string; isGroup?: boolean };
   CreateEvent: undefined;
   EventDetail: { eventId: string };
   Privacy: undefined;

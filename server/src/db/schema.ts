@@ -109,10 +109,15 @@ export const conversations = pgTable(
   "conversations",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    // Nullable: a conversation backs either a 1:1 match or a per-event group
+    // chat, exactly one of matchId/eventId is set (app-layer only, same
+    // convention as events.capacity — no DB CHECK constraint).
     matchId: uuid("match_id")
-      .notNull()
       .unique()
       .references(() => matches.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id")
+      .unique()
+      .references(() => events.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
 );
@@ -169,10 +174,58 @@ export const eventMembers = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+    // Soft delete (set on leave) instead of row removal, so past membership
+    // survives leaving — needed for photo/rating eligibility and the
+    // mine=true&when=past events filter. Null while currently attending.
+    leftAt: timestamp("left_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("event_members_event_user_unique").on(table.eventId, table.userId),
     index("event_members_user_idx").on(table.userId),
+  ],
+);
+
+export const eventPhotos = pgTable(
+  "event_photos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    uploaderUserId: uuid("uploader_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Same compressed base64 data: URI shortcut as profiles.photoUrl — see
+    // docs/requirements/09-events-depth.md Decisions for the honest
+    // row/size-growth tradeoff of reusing it here.
+    photoData: text("photo_data").notNull(),
+    caption: varchar("caption", { length: 200 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("event_photos_event_created_idx").on(table.eventId, table.createdAt)],
+);
+
+export const eventRatings = pgTable(
+  "event_ratings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    raterUserId: uuid("rater_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    rateeUserId: uuid("ratee_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    stars: integer("stars").notNull(), // 1-5, enforced at the API layer (same convention as events.capacity)
+    comment: varchar("comment", { length: 300 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("event_ratings_event_rater_ratee_unique").on(table.eventId, table.raterUserId, table.rateeUserId),
+    index("event_ratings_ratee_created_idx").on(table.rateeUserId, table.createdAt),
   ],
 );
 

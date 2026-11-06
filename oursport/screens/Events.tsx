@@ -45,6 +45,7 @@ export function Events() {
   // doesn't fire a network request on every keystroke.
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sportFilter, setSportFilter] = useState<string | null>(null);
+  const [mineFilter, setMineFilter] = useState<"all" | "mine" | "past">("all");
   const [actionErrorEventId, setActionErrorEventId] = useState<string | null>(null);
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [pendingEventIds, setPendingEventIds] = useState<Set<string>>(new Set());
@@ -60,10 +61,12 @@ export function Events() {
       const params: string[] = [];
       if (debouncedQuery.trim()) params.push(`q=${encodeURIComponent(debouncedQuery.trim())}`);
       if (sportFilter) params.push(`sport=${encodeURIComponent(sportFilter)}`);
+      if (mineFilter !== "all") params.push("mine=true");
+      if (mineFilter === "past") params.push("when=past");
       if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
       return params.length > 0 ? `/v1/events?${params.join("&")}` : "/v1/events";
     },
-    [debouncedQuery, sportFilter],
+    [debouncedQuery, sportFilter, mineFilter],
   );
 
   const loadEvents = useCallback(async () => {
@@ -180,6 +183,15 @@ export function Events() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filterRow}
       >
+        <Chip label={t("events.filterAll")} selected={mineFilter === "all"} onPress={() => setMineFilter("all")} />
+        <Chip label={t("events.filterMine")} selected={mineFilter === "mine"} onPress={() => setMineFilter("mine")} />
+        <Chip label={t("events.filterPast")} selected={mineFilter === "past"} onPress={() => setMineFilter("past")} />
+      </ScrollView>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filterRow}
+      >
         <Chip label={t("events.filterAll")} selected={sportFilter === null} onPress={() => setSportFilter(null)} />
         {sports.map((item) => (
           <Chip
@@ -190,7 +202,7 @@ export function Events() {
           />
         ))}
       </ScrollView>
-      {forYouEvents.length > 0 && (
+      {mineFilter === "all" && forYouEvents.length > 0 && (
         <>
           <Text style={styles.label}>{t("events.forYou")}</Text>
           <ScrollView

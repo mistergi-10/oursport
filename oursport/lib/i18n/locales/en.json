@@ -122,6 +122,8 @@
     "createEvent": "Create event",
     "searchPlaceholder": "Search by location or keyword",
     "filterAll": "All",
+    "filterMine": "My upcoming",
+    "filterPast": "My past",
     "forYou": "For you",
     "loadErrorTitle": "Connection error",
     "loadErrorBody": "Events could not be loaded.",
@@ -165,7 +167,20 @@
     "organizerLabel": "Organizer",
     "spotsLabel": "Spots",
     "spotsValue": "{{attending}}/{{capacity}} filled · {{spotsLeft}} open",
-    "attendeesLabel": "Attendees"
+    "attendeesLabel": "Attendees",
+    "chatButton": "Go to event chat",
+    "photosLabel": "Photos",
+    "uploadPhoto": "Upload photo",
+    "photoCaptionPlaceholder": "Caption (optional)",
+    "photoAccessDenied": "Access to photos was not granted.",
+    "photoTooLarge": "Photo is too large, please choose a smaller image.",
+    "photoUploadFailed": "Photo could not be uploaded",
+    "leftAttendeeSuffix": "(no longer attending)",
+    "starsLabel_one": "{{count}} star",
+    "starsLabel_other": "{{count}} stars",
+    "commentPlaceholder": "Comment (optional)",
+    "rateButton": "Rate",
+    "ratingSubmitFailed": "Rating could not be saved"
   },
   "profile": {
     "title": "Profile",
@@ -193,7 +208,10 @@
     "locationSavedBody": "Current location is saved. Tap to update.",
     "locationPromptBody": "Use your current location for better suggestions nearby.",
     "privacyRow": "Data & privacy",
-    "logout": "Log out"
+    "logout": "Log out",
+    "ratingsLabel": "Your ratings",
+    "noRatingsYet": "No ratings yet",
+    "ratingsHelper": "Ratings from fellow players after shared events."
   },
   "privacy": {
     "headerTitle": "Data & privacy",

@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import websocketPlugin from "@fastify/websocket";
 import Fastify from "fastify";
-import { and, asc, desc, eq, gt, isNull, lt, ne, notExists, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { authenticate, authenticateFromToken, AuthenticationError, issueToken } from "./auth.js";
@@ -14,6 +14,8 @@ import {
   conversationReads,
   conversations,
   eventMembers,
+  eventPhotos,
+  eventRatings,
   events,
   eventWaitlist,
   matches,
@@ -180,9 +182,29 @@ const eventsQuerySchema = z.object({
   q: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().trim().min(1).optional(),
+  mine: z.literal("true").optional(),
+  when: z.enum(["upcoming", "past"]).optional(),
 });
 const eventParamsSchema = z.object({
   eventId: z.string().uuid(),
+});
+// Same regex/max-length as profiles.photoUrl (see Decisions in
+// docs/requirements/09-events-depth.md), but required rather than nullable.
+const eventPhotoCreateSchema = z.object({
+  photoData: z
+    .string()
+    .trim()
+    .max(350_000)
+    .regex(/^data:image\/(png|jpeg|jpg|webp);base64,/),
+  caption: z.string().trim().max(200).optional(),
+});
+const eventRatingBodySchema = z.object({
+  stars: z.coerce.number().int().min(1).max(5),
+  comment: z.string().trim().max(300).optional(),
+});
+const eventRatingParamsSchema = z.object({
+  eventId: z.string().uuid(),
+  rateeUserId: z.string().uuid(),
 });
 const blockBodySchema = z.object({
   userId: z.string().uuid(),
@@ -1070,10 +1092,12 @@ app.get("/v1/conversations/:conversationId/messages", async (request, reply) => 
     .select({
       messageId: messages.id,
       senderUserId: messages.senderUserId,
+      senderName: profiles.displayName,
       body: messages.body,
       createdAt: messages.createdAt,
     })
     .from(messages)
+    .innerJoin(profiles, eq(profiles.userId, messages.senderUserId))
     .where(
       and(
         eq(messages.conversationId, conversation.id),
@@ -1097,6 +1121,7 @@ app.get("/v1/conversations/:conversationId/messages", async (request, reply) => 
     messages: page.map((row) => ({
       messageId: row.messageId,
       senderUserId: row.senderUserId,
+      senderName: row.senderName,
       body: row.body,
       createdAt: row.createdAt.toISOString(),
     })),
@@ -1152,10 +1177,21 @@ app.post(
   const conversation = await findConversationForParticipant(database, params.conversationId, userId);
   if (!conversation) return reply.code(404).send(errorBody("Conversation not found", "conversation_not_found"));
 
+  const [senderProfile] = await database
+    .select({ displayName: profiles.displayName })
+    .from(profiles)
+    .where(eq(profiles.userId, userId));
+
   const [message] = await database
     .insert(messages)
     .values({ conversationId: conversation.id, senderUserId: userId, body: body.body })
     .returning();
+
+  const senderName = senderProfile?.displayName ?? "";
+
+  // Generalizes the old two-party (userLowId/userHighId) fan-out to any number
+  // of recipients, so a group event conversation delivers to every current member.
+  const participantIds = await getConversationParticipantIds(database, conversation);
 
   const wsPayload = {
     type: "message" as const,
@@ -1163,19 +1199,21 @@ app.post(
     message: {
       messageId: message.id,
       senderUserId: message.senderUserId,
+      senderName,
       body: message.body,
       createdAt: message.createdAt.toISOString(),
     },
   };
-  sendToUser(conversation.userLowId, wsPayload);
-  sendToUser(conversation.userHighId, wsPayload);
+  for (const participantId of participantIds) {
+    sendToUser(participantId, wsPayload);
+  }
 
-  // Best-effort push, skipped if the recipient already has the app open via
-  // Pillar 3's websocket (avoids double-notifying someone with chat open).
-  const recipientUserId = conversation.userLowId === userId ? conversation.userHighId : conversation.userLowId;
-  if (!hasConnectedSocket(recipientUserId)) {
-    const preview = message.body.length > 80 ? `${message.body.slice(0, 80)}…` : message.body;
-    void sendWebPushToUser(recipientUserId, {
+  // Best-effort push to every other participant, skipped for whoever already has
+  // the app open via Pillar 3's websocket (avoids double-notifying someone with chat open).
+  const preview = message.body.length > 80 ? `${message.body.slice(0, 80)}…` : message.body;
+  for (const participantId of participantIds) {
+    if (participantId === userId || hasConnectedSocket(participantId)) continue;
+    void sendWebPushToUser(participantId, {
       type: "message",
       title: "Neue Nachricht",
       body: preview,
@@ -1186,6 +1224,7 @@ app.post(
   return reply.code(201).send({
     messageId: message.id,
     senderUserId: message.senderUserId,
+    senderName,
     body: message.body,
     createdAt: message.createdAt.toISOString(),
   });
@@ -1232,6 +1271,13 @@ app.post(
       .values({ eventId: event.id, userId })
       .returning({ joinedAt: eventMembers.joinedAt });
 
+    // Mirrors how a match's conversations row is created in the same
+    // transaction as the match (Pillar 3) — every event gets a group chat.
+    const [conversation] = await tx
+      .insert(conversations)
+      .values({ eventId: event.id })
+      .returning({ id: conversations.id });
+
     // Fixed 8-occurrence batch (see Decisions): the creator is auto-joined to
     // every generated occurrence too, each an independent, independently
     // joinable/leavable event row sharing only the new seriesId.
@@ -1250,13 +1296,14 @@ app.post(
         seriesId,
       }));
       const occurrences = await tx.insert(events).values(occurrenceValues).returning({ id: events.id });
+      await tx.insert(conversations).values(occurrences.map((occurrence) => ({ eventId: occurrence.id })));
       await tx
         .insert(eventMembers)
         .values(occurrences.map((occurrence) => ({ eventId: occurrence.id, userId })));
     }
 
     return {
-      core: { ...event, creatorName: creatorProfile.displayName },
+      core: { ...event, creatorName: creatorProfile.displayName, conversationId: conversation.id },
       memberRows: [{ userId, name: creatorProfile.displayName, joinedAt: member.joinedAt }],
     };
   });
@@ -1271,6 +1318,10 @@ app.get("/v1/events", async (request, reply) => {
   const database = getDatabase();
   const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
 
+  if (query.when === "past" && query.mine !== "true") {
+    return reply.code(400).send(errorBody("when=past requires mine=true", "when_requires_mine"));
+  }
+
   let cursor: { sortAt: Date; id: string } | null = null;
   if (query.cursor) {
     cursor = decodeCursor(query.cursor);
@@ -1281,6 +1332,8 @@ app.get("/v1/events", async (request, reply) => {
     city: query.city,
     sport: query.sport,
     q: query.q,
+    mine: query.mine === "true",
+    when: query.when ?? "upcoming",
     cursor,
     limit: query.limit,
   });
@@ -1323,14 +1376,55 @@ app.get("/v1/events/:eventId", async (request, reply) => {
 
   const core = await loadEventCore(database, params.eventId);
   if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+  // Guarantees conversationId is genuinely always present as documented, including
+  // for events created before this slice shipped a conversations row at creation time.
+  core.conversationId = await ensureEventConversationId(database, params.eventId, core.conversationId);
 
   const memberRows = await loadEventMembers(database, params.eventId);
   const waitlistRows = await loadEventWaitlist(database, params.eventId);
 
+  const isPast = core.startsAt.getTime() <= Date.now();
+  // Past event: everyone who was ever a member (so there's someone to rate even
+  // if they later left); future event: current members only, leftAt always null.
+  const attendeeRows = isPast
+    ? await loadEventAttendeesEver(database, params.eventId)
+    : memberRows.map((row) => ({ ...row, leftAt: null as Date | null }));
+  const callerAttended = attendeeRows.some((row) => row.userId === userId);
+  const ratingAggregates = await loadRatingAggregates(
+    database,
+    attendeeRows.map((row) => row.userId),
+  );
+
   return reply.send({
     ...summarizeEvent(core, memberRows, waitlistRows, userId),
-    attendees: memberRows.map((row) => ({ userId: row.userId, name: row.name })),
+    attendees: attendeeRows.map((row) => {
+      const aggregate = ratingAggregates.get(row.userId) ?? { averageRating: null, ratingCount: 0 };
+      return {
+        userId: row.userId,
+        name: row.name,
+        leftAt: row.leftAt ? row.leftAt.toISOString() : null,
+        averageRating: aggregate.averageRating,
+        ratingCount: aggregate.ratingCount,
+        canRate: isPast && callerAttended && row.userId !== userId,
+      };
+    }),
   });
+});
+
+// Fetch-or-create: every event created going forward already gets a
+// conversations row at creation time (see POST /v1/events), but events created
+// before this slice shipped have none yet — this backfills one on first access.
+app.get("/v1/events/:eventId/conversation", async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const params = eventParamsSchema.parse(request.params);
+  const database = getDatabase();
+  await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  const core = await loadEventCore(database, params.eventId);
+  if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+
+  const conversationId = await ensureEventConversationId(database, params.eventId, core.conversationId);
+  return reply.send({ conversationId });
 });
 
 app.post(
@@ -1350,6 +1444,9 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    // Backfills events created before this slice shipped a conversations row at
+    // creation time, so the response's conversationId (EventDetail contract) is never null.
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.startsAt.getTime() <= Date.now()) return { status: "past" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1357,8 +1454,16 @@ app.post(
 
     if (!alreadyMember) {
       if (memberRows.length >= core.capacity) return { status: "full" as const };
-      // Defense-in-depth alongside the advisory lock, matching the matches-insert pattern in POST /v1/swipes.
-      await tx.insert(eventMembers).values({ eventId: params.eventId, userId }).onConflictDoNothing();
+      // Upsert instead of onConflictDoNothing: a prior leave leaves the
+      // (eventId, userId) row in place with leftAt set, so re-joining must
+      // reset leftAt/joinedAt on that same row rather than no-op (Pillar 4).
+      await tx
+        .insert(eventMembers)
+        .values({ eventId: params.eventId, userId })
+        .onConflictDoUpdate({
+          target: [eventMembers.eventId, eventMembers.userId],
+          set: { leftAt: null, joinedAt: new Date() },
+        });
     }
 
     const finalMemberRows = alreadyMember ? memberRows : await loadEventMembers(tx, params.eventId);
@@ -1390,6 +1495,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.creatorUserId === userId) return { status: "creator" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1397,9 +1503,18 @@ app.post(
 
     let promotedUserId: string | null = null;
     if (membership) {
+      // Soft delete (Pillar 4): keeps the row so Pillars 1-2's "ever attended"
+      // checks and the mine=true&when=past filter still recognize this membership.
       await tx
-        .delete(eventMembers)
-        .where(and(eq(eventMembers.eventId, params.eventId), eq(eventMembers.userId, userId)));
+        .update(eventMembers)
+        .set({ leftAt: new Date() })
+        .where(
+          and(
+            eq(eventMembers.eventId, params.eventId),
+            eq(eventMembers.userId, userId),
+            isNull(eventMembers.leftAt),
+          ),
+        );
 
       // Auto-promote the earliest-joined waitlisted user into the vacated spot.
       const [earliestWaitlisted] = await loadEventWaitlist(tx, params.eventId);
@@ -1412,10 +1527,15 @@ app.post(
               eq(eventWaitlist.userId, earliestWaitlisted.userId),
             ),
           );
+        // Upsert for the same reason as the join route: the promoted user may
+        // have a past (left) event_members row already.
         await tx
           .insert(eventMembers)
           .values({ eventId: params.eventId, userId: earliestWaitlisted.userId })
-          .onConflictDoNothing();
+          .onConflictDoUpdate({
+            target: [eventMembers.eventId, eventMembers.userId],
+            set: { leftAt: null, joinedAt: new Date() },
+          });
         promotedUserId = earliestWaitlisted.userId;
       }
     }
@@ -1466,6 +1586,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
     if (core.creatorUserId === userId) return { status: "creator" as const };
 
     const memberRows = await loadEventMembers(tx, params.eventId);
@@ -1504,6 +1625,7 @@ app.post(
 
     const core = await loadEventCore(tx, params.eventId);
     if (!core) return { status: "not_found" as const };
+    core.conversationId = await ensureEventConversationId(tx, params.eventId, core.conversationId);
 
     // Idempotent: removing a waitlist row the caller never had is not an error.
     await tx
@@ -1520,6 +1642,278 @@ app.post(
   return reply.send(summarizeEvent(result.core, result.memberRows, result.waitlistRows, userId));
   },
 );
+
+app.post(
+  "/v1/events/:eventId/photos",
+  { config: { rateLimit: { max: 20, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+    const identity = await authenticate(request.headers);
+    const params = eventParamsSchema.parse(request.params);
+    const body = eventPhotoCreateSchema.parse(request.body);
+    const database = getDatabase();
+    const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+    const core = await loadEventCore(database, params.eventId);
+    if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+    if (core.startsAt.getTime() > Date.now()) {
+      return reply.code(400).send(errorBody("Event hasn't happened yet", "event_not_started"));
+    }
+
+    // "Attended" = has an event_members row (current or past, leftAt either way).
+    const [membership] = await database
+      .select({ id: eventMembers.id })
+      .from(eventMembers)
+      .where(and(eq(eventMembers.eventId, params.eventId), eq(eventMembers.userId, userId)));
+    if (!membership) {
+      return reply.code(403).send(errorBody("Only members who attended can upload photos", "not_attended"));
+    }
+
+    const [uploaderProfile] = await database
+      .select({ displayName: profiles.displayName })
+      .from(profiles)
+      .where(eq(profiles.userId, userId));
+    if (!uploaderProfile) return reply.code(404).send(errorBody("Profile not found", "profile_not_found"));
+
+    const caption = body.caption && body.caption.length > 0 ? body.caption : null;
+
+    const result = await database.transaction(async (tx) => {
+      // Serializes concurrent uploads for this event so the 40-photo cap can't
+      // be raced past by near-simultaneous uploads (same pattern as event join).
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${params.eventId}:photos`}))`);
+
+      const [{ count }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(eventPhotos)
+        .where(eq(eventPhotos.eventId, params.eventId));
+      if (count >= 40) return { status: "full" as const };
+
+      const [photo] = await tx
+        .insert(eventPhotos)
+        .values({ eventId: params.eventId, uploaderUserId: userId, photoData: body.photoData, caption })
+        .returning();
+      return { status: "ok" as const, photo };
+    });
+
+    if (result.status === "full") {
+      return reply.code(400).send(errorBody("Photo gallery is full for this event", "photo_gallery_full"));
+    }
+
+    return reply.code(201).send({
+      photoId: result.photo.id,
+      eventId: result.photo.eventId,
+      uploaderUserId: result.photo.uploaderUserId,
+      uploaderName: uploaderProfile.displayName,
+      photoData: result.photo.photoData,
+      caption: result.photo.caption,
+      createdAt: result.photo.createdAt.toISOString(),
+    });
+  },
+);
+
+app.get("/v1/events/:eventId/photos", async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const params = eventParamsSchema.parse(request.params);
+  const query = paginationQuerySchema.parse(request.query);
+  const database = getDatabase();
+  const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  const core = await loadEventCore(database, params.eventId);
+  if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+
+  const [membership] = await database
+    .select({ id: eventMembers.id })
+    .from(eventMembers)
+    .where(and(eq(eventMembers.eventId, params.eventId), eq(eventMembers.userId, userId)));
+  if (!membership) {
+    return reply.code(403).send(errorBody("Only members who attended can upload photos", "not_attended"));
+  }
+
+  let cursor: { sortAt: Date; id: string } | null = null;
+  if (query.cursor) {
+    cursor = decodeCursor(query.cursor);
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
+  }
+
+  const rows = await database
+    .select({
+      photoId: eventPhotos.id,
+      uploaderUserId: eventPhotos.uploaderUserId,
+      uploaderName: profiles.displayName,
+      photoData: eventPhotos.photoData,
+      caption: eventPhotos.caption,
+      createdAt: eventPhotos.createdAt,
+    })
+    .from(eventPhotos)
+    .innerJoin(profiles, eq(profiles.userId, eventPhotos.uploaderUserId))
+    .where(
+      and(
+        eq(eventPhotos.eventId, params.eventId),
+        cursor
+          ? or(
+              lt(eventPhotos.createdAt, cursor.sortAt),
+              and(eq(eventPhotos.createdAt, cursor.sortAt), lt(eventPhotos.id, cursor.id)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(eventPhotos.createdAt), desc(eventPhotos.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const page = hasMore ? rows.slice(0, query.limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor(last.createdAt, last.photoId) : null;
+
+  return reply.send({
+    photos: page.map((row) => ({
+      photoId: row.photoId,
+      uploaderUserId: row.uploaderUserId,
+      uploaderName: row.uploaderName,
+      photoData: row.photoData,
+      caption: row.caption,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    nextCursor,
+  });
+});
+
+app.post(
+  "/v1/events/:eventId/ratings/:rateeUserId",
+  { config: { rateLimit: { max: 30, timeWindow: "10 minutes", hook: "preHandler", keyGenerator: userIdKey } } },
+  async (request, reply) => {
+    const identity = await authenticate(request.headers);
+    const params = eventRatingParamsSchema.parse(request.params);
+    const body = eventRatingBodySchema.parse(request.body);
+    const database = getDatabase();
+    const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+    const core = await loadEventCore(database, params.eventId);
+    if (!core) return reply.code(404).send(errorBody("Event not found", "event_not_found"));
+    if (core.startsAt.getTime() > Date.now()) {
+      return reply.code(400).send(errorBody("Event hasn't happened yet", "event_not_started"));
+    }
+    if (params.rateeUserId === userId) {
+      return reply.code(400).send(errorBody("Cannot rate yourself", "cannot_rate_self"));
+    }
+
+    // "Attended" = has an event_members row (current or past); one query covering
+    // both sides, checked together so the response can't leak which side failed.
+    const attendedRows = await database
+      .select({ userId: eventMembers.userId })
+      .from(eventMembers)
+      .where(
+        and(
+          eq(eventMembers.eventId, params.eventId),
+          inArray(eventMembers.userId, [userId, params.rateeUserId]),
+        ),
+      );
+    const attendedUserIds = new Set(attendedRows.map((row) => row.userId));
+    if (!attendedUserIds.has(userId) || !attendedUserIds.has(params.rateeUserId)) {
+      return reply.code(403).send(errorBody("Both must have attended this event to rate", "not_attended"));
+    }
+
+    const comment = body.comment && body.comment.length > 0 ? body.comment : null;
+    const now = new Date();
+    const [rating] = await database
+      .insert(eventRatings)
+      .values({
+        eventId: params.eventId,
+        raterUserId: userId,
+        rateeUserId: params.rateeUserId,
+        stars: body.stars,
+        comment,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [eventRatings.eventId, eventRatings.raterUserId, eventRatings.rateeUserId],
+        set: { stars: body.stars, comment, updatedAt: now },
+      })
+      .returning();
+
+    return reply.send({
+      eventId: rating.eventId,
+      rateeUserId: rating.rateeUserId,
+      stars: rating.stars,
+      comment: rating.comment,
+      createdAt: rating.createdAt.toISOString(),
+      updatedAt: rating.updatedAt.toISOString(),
+    });
+  },
+);
+
+app.get("/v1/users/me/ratings", async (request, reply) => {
+  const identity = await authenticate(request.headers);
+  const query = paginationQuerySchema.parse(request.query);
+  const database = getDatabase();
+  const userId = await resolveUserId(identity.subject, identity.userId, identity.tokenVersion);
+
+  let cursor: { sortAt: Date; id: string } | null = null;
+  if (query.cursor) {
+    cursor = decodeCursor(query.cursor);
+    if (!cursor) return reply.code(400).send(errorBody("Invalid cursor", "invalid_cursor"));
+  }
+
+  // Computed independently of the current page — a full aggregate, not derived
+  // from the returned slice.
+  const [summaryRow] = await database
+    .select({
+      averageRating: sql<number | null>`avg(${eventRatings.stars})::float`,
+      ratingCount: sql<number>`count(*)::int`,
+    })
+    .from(eventRatings)
+    .where(eq(eventRatings.rateeUserId, userId));
+
+  const rows = await database
+    .select({
+      ratingId: eventRatings.id,
+      eventId: eventRatings.eventId,
+      eventTitle: events.title,
+      raterUserId: eventRatings.raterUserId,
+      raterName: profiles.displayName,
+      stars: eventRatings.stars,
+      comment: eventRatings.comment,
+      createdAt: eventRatings.createdAt,
+    })
+    .from(eventRatings)
+    .innerJoin(events, eq(events.id, eventRatings.eventId))
+    .innerJoin(profiles, eq(profiles.userId, eventRatings.raterUserId))
+    .where(
+      and(
+        eq(eventRatings.rateeUserId, userId),
+        cursor
+          ? or(
+              lt(eventRatings.createdAt, cursor.sortAt),
+              and(eq(eventRatings.createdAt, cursor.sortAt), lt(eventRatings.id, cursor.id)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(eventRatings.createdAt), desc(eventRatings.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const page = hasMore ? rows.slice(0, query.limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor(last.createdAt, last.ratingId) : null;
+
+  return reply.send({
+    summary: {
+      averageRating: summaryRow?.averageRating ?? null,
+      ratingCount: summaryRow?.ratingCount ?? 0,
+    },
+    ratings: page.map((row) => ({
+      ratingId: row.ratingId,
+      eventId: row.eventId,
+      eventTitle: row.eventTitle,
+      raterUserId: row.raterUserId,
+      raterName: row.raterName,
+      stars: row.stars,
+      comment: row.comment,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    nextCursor,
+  });
+});
 
 app.post(
   "/v1/blocks",
@@ -1770,28 +2164,46 @@ function toProfileResponse(profile: typeof profiles.$inferSelect) {
 }
 
 // Returns null both when the conversation doesn't exist and when the caller isn't a
-// participant (or a block exists between the two participants), so callers can
+// participant (match pair, or — Pillar 3 — a current event member), so callers can
 // respond 404 in all cases without leaking which it was.
 async function findConversationForParticipant(
-  database: ReturnType<typeof getDatabase>,
+  database: DatabaseOrTx,
   conversationId: string,
   userId: string,
 ) {
-  // Single query (left join on blocks) instead of a conversation lookup followed by
-  // a separate isBlocked call, so "doesn't exist / not a participant" and "blocked"
-  // take the same number of DB round-trips (no timing side-channel). A match only
-  // has two participants, so a block between userLowId/userHighId is necessarily a
-  // block between the caller and the other participant.
   const [conversation] = await database
-    .select({
-      id: conversations.id,
-      matchId: conversations.matchId,
-      userLowId: matches.userLowId,
-      userHighId: matches.userHighId,
-      blockId: blocks.id,
-    })
+    .select({ id: conversations.id, matchId: conversations.matchId, eventId: conversations.eventId })
     .from(conversations)
-    .innerJoin(matches, eq(matches.id, conversations.matchId))
+    .where(eq(conversations.id, conversationId));
+  if (!conversation) return null;
+
+  if (conversation.eventId) {
+    // Event group conversation: authorized iff the caller currently (leftAt IS
+    // NULL) belongs to the event. The `blocks` check is intentionally not
+    // applied here — generalizing pairwise blocking to an N-party room is out
+    // of scope for this slice (see docs/requirements/09-events-depth.md).
+    const [membership] = await database
+      .select({ id: eventMembers.id })
+      .from(eventMembers)
+      .where(
+        and(
+          eq(eventMembers.eventId, conversation.eventId),
+          eq(eventMembers.userId, userId),
+          isNull(eventMembers.leftAt),
+        ),
+      );
+    return membership ? conversation : null;
+  }
+
+  if (!conversation.matchId) return null;
+
+  // Single query (left join on blocks) instead of a separate isBlocked call, so
+  // "not a participant" and "blocked" take the same number of DB round-trips (no
+  // timing side-channel). A match only has two participants, so a block between
+  // userLowId/userHighId is necessarily a block between the caller and the other participant.
+  const [match] = await database
+    .select({ blockId: blocks.id })
+    .from(matches)
     .leftJoin(
       blocks,
       or(
@@ -1801,13 +2213,37 @@ async function findConversationForParticipant(
     )
     .where(
       and(
-        eq(conversations.id, conversationId),
+        eq(matches.id, conversation.matchId),
         or(eq(matches.userLowId, userId), eq(matches.userHighId, userId)),
       ),
     );
-  if (!conversation || conversation.blockId) return null;
+  if (!match || match.blockId) return null;
 
   return conversation;
+}
+
+// All current (leftAt IS NULL, for event conversations) recipients of a
+// conversation, for websocket fan-out and push — generalizes the old two-party
+// (userLowId/userHighId) assumption to a group of any size.
+async function getConversationParticipantIds(
+  database: DatabaseOrTx,
+  conversation: { matchId: string | null; eventId: string | null },
+) {
+  if (conversation.eventId) {
+    const rows = await database
+      .select({ userId: eventMembers.userId })
+      .from(eventMembers)
+      .where(and(eq(eventMembers.eventId, conversation.eventId), isNull(eventMembers.leftAt)));
+    return rows.map((row) => row.userId);
+  }
+  if (conversation.matchId) {
+    const [match] = await database
+      .select({ userLowId: matches.userLowId, userHighId: matches.userHighId })
+      .from(matches)
+      .where(eq(matches.id, conversation.matchId));
+    return match ? [match.userLowId, match.userHighId] : [];
+  }
+  return [];
 }
 
 // Shared block check backing discover/swipes/matches/conversations: treats `blocks`
@@ -1842,22 +2278,93 @@ async function loadEventCore(database: DatabaseOrTx, eventId: string) {
       creatorUserId: events.creatorUserId,
       creatorName: profiles.displayName,
       seriesId: events.seriesId,
+      // Nullable: events created before this slice shipped have no row yet —
+      // see GET /v1/events/:eventId/conversation for the lazy-backfill path.
+      conversationId: conversations.id,
     })
     .from(events)
     .innerJoin(profiles, eq(profiles.userId, events.creatorUserId))
+    .leftJoin(conversations, eq(conversations.eventId, events.id))
     .where(eq(events.id, eventId));
   return core ?? null;
 }
 
+// Fetch-or-create: new events already get a conversations row at creation time
+// (see POST /v1/events), but events created before this slice shipped have none
+// yet — this backfills one on first access so conversationId is genuinely always
+// present, as documented on GET /v1/events/:eventId and this endpoint's response.
+async function ensureEventConversationId(
+  database: DatabaseOrTx,
+  eventId: string,
+  existingConversationId: string | null,
+) {
+  if (existingConversationId) return existingConversationId;
+
+  const [created] = await database
+    .insert(conversations)
+    .values({ eventId })
+    .onConflictDoNothing({ target: conversations.eventId })
+    .returning({ id: conversations.id });
+  if (created) return created.id;
+
+  // Lost a race with a concurrent first-access call; re-read what it inserted.
+  const [existing] = await database
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.eventId, eventId));
+  return existing!.id;
+}
+
 // Ordered by joinedAt ASC so the creator (joined in the creation transaction) is
 // always first; also doubles as the attendee count (array length) everywhere.
+// Current members only (leftAt IS NULL) — see loadEventAttendeesEver for the
+// past-event "everyone who was ever a member" variant.
 async function loadEventMembers(database: DatabaseOrTx, eventId: string) {
   return database
     .select({ userId: eventMembers.userId, name: profiles.displayName, joinedAt: eventMembers.joinedAt })
     .from(eventMembers)
     .innerJoin(profiles, eq(profiles.userId, eventMembers.userId))
+    .where(and(eq(eventMembers.eventId, eventId), isNull(eventMembers.leftAt)))
+    .orderBy(asc(eventMembers.joinedAt));
+}
+
+// Everyone who was ever a member of the event (including past members who've
+// since left), for a past event's attendee/rating list — Pillar 1/2's "attended"
+// definition is "has an event_members row", regardless of leftAt.
+async function loadEventAttendeesEver(database: DatabaseOrTx, eventId: string) {
+  return database
+    .select({
+      userId: eventMembers.userId,
+      name: profiles.displayName,
+      joinedAt: eventMembers.joinedAt,
+      leftAt: eventMembers.leftAt,
+    })
+    .from(eventMembers)
+    .innerJoin(profiles, eq(profiles.userId, eventMembers.userId))
     .where(eq(eventMembers.eventId, eventId))
     .orderBy(asc(eventMembers.joinedAt));
+}
+
+// Global (not per-event) rating aggregates for a set of users, for the public
+// averageRating/ratingCount shown next to an attendee's name.
+async function loadRatingAggregates(database: DatabaseOrTx, userIds: string[]) {
+  const aggregates = new Map<string, { averageRating: number | null; ratingCount: number }>();
+  if (userIds.length === 0) return aggregates;
+
+  const rows = await database
+    .select({
+      rateeUserId: eventRatings.rateeUserId,
+      averageRating: sql<number>`avg(${eventRatings.stars})::float`,
+      ratingCount: sql<number>`count(*)::int`,
+    })
+    .from(eventRatings)
+    .where(inArray(eventRatings.rateeUserId, userIds))
+    .groupBy(eventRatings.rateeUserId);
+
+  for (const row of rows) {
+    aggregates.set(row.rateeUserId, { averageRating: row.averageRating, ratingCount: row.ratingCount });
+  }
+  return aggregates;
 }
 
 // Ordered by joinedAt ASC so index 0 is always the next promotion candidate
@@ -1898,11 +2405,12 @@ function summarizeEvent(
     waitlistCount: waitlistRows.length,
     isWaitlisted: waitlistRows.some((row) => row.userId === userId),
     seriesId: core.seriesId,
+    conversationId: core.conversationId,
   };
 }
 
-// Shared by GET /v1/events and GET /v1/events/for-you: same future-only
-// filter, keyset pagination, and response shape; only the WHERE-clause filters differ.
+// Shared by GET /v1/events and GET /v1/events/for-you: same keyset pagination and
+// response shape; the time filter/ordering direction and "mine" scoping differ.
 async function fetchEventsPage(
   database: Database,
   userId: string,
@@ -1911,10 +2419,22 @@ async function fetchEventsPage(
     sport?: string;
     q?: string;
     forYou?: { city: string; sport: string };
+    mine?: boolean;
+    when?: "upcoming" | "past";
     cursor: { sortAt: Date; id: string } | null;
     limit: number;
   },
 ) {
+  const isPast = options.when === "past";
+  // mine=true&when=upcoming requires CURRENT membership (leftAt IS NULL, same as
+  // isAttending elsewhere); mine=true&when=past includes anyone EVER a member,
+  // including those who've since left (Pillar 4 Decision 7).
+  const mineCondition = options.mine
+    ? isPast
+      ? sql`(${events.creatorUserId} = ${userId} or exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId}))`
+      : sql`(${events.creatorUserId} = ${userId} or exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId} and ${eventMembers.leftAt} is null))`
+    : undefined;
+
   const rows = await database
     .select({
       eventId: events.id,
@@ -1927,8 +2447,8 @@ async function fetchEventsPage(
       creatorUserId: events.creatorUserId,
       creatorName: profiles.displayName,
       seriesId: events.seriesId,
-      attendeeCount: sql<number>`(select count(*)::int from ${eventMembers} where ${eventMembers.eventId} = ${events.id})`,
-      isAttending: sql<boolean>`exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId})`,
+      attendeeCount: sql<number>`(select count(*)::int from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.leftAt} is null)`,
+      isAttending: sql<boolean>`exists (select 1 from ${eventMembers} where ${eventMembers.eventId} = ${events.id} and ${eventMembers.userId} = ${userId} and ${eventMembers.leftAt} is null)`,
       waitlistCount: sql<number>`(select count(*)::int from ${eventWaitlist} where ${eventWaitlist.eventId} = ${events.id})`,
       isWaitlisted: sql<boolean>`exists (select 1 from ${eventWaitlist} where ${eventWaitlist.eventId} = ${events.id} and ${eventWaitlist.userId} = ${userId})`,
     })
@@ -1936,7 +2456,8 @@ async function fetchEventsPage(
     .innerJoin(profiles, eq(profiles.userId, events.creatorUserId))
     .where(
       and(
-        gt(events.startsAt, new Date()),
+        isPast ? lte(events.startsAt, new Date()) : gt(events.startsAt, new Date()),
+        mineCondition,
         options.city ? eq(sql`lower(${events.city})`, options.city.toLowerCase()) : undefined,
         options.sport ? eq(sql`lower(${events.sport})`, options.sport.toLowerCase()) : undefined,
         options.q
@@ -1946,14 +2467,19 @@ async function fetchEventsPage(
           ? or(eq(events.sport, options.forYou.sport), eq(events.city, options.forYou.city))
           : undefined,
         options.cursor
-          ? or(
-              gt(events.startsAt, options.cursor.sortAt),
-              and(eq(events.startsAt, options.cursor.sortAt), gt(events.id, options.cursor.id)),
-            )
+          ? isPast
+            ? or(
+                lt(events.startsAt, options.cursor.sortAt),
+                and(eq(events.startsAt, options.cursor.sortAt), lt(events.id, options.cursor.id)),
+              )
+            : or(
+                gt(events.startsAt, options.cursor.sortAt),
+                and(eq(events.startsAt, options.cursor.sortAt), gt(events.id, options.cursor.id)),
+              )
           : undefined,
       ),
     )
-    .orderBy(asc(events.startsAt), asc(events.id))
+    .orderBy(isPast ? desc(events.startsAt) : asc(events.startsAt), isPast ? desc(events.id) : asc(events.id))
     .limit(options.limit + 1);
 
   const hasMore = rows.length > options.limit;
